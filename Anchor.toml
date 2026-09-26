@@ -10,7 +10,7 @@ skip-lint = false
 zkclaim = "EHsj9Fz1QuPB9drLUF9SPk63y23pXcSXzfr65MjD3nT3"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
