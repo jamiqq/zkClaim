@@ -52,6 +52,170 @@ export type Zkclaim = {
       ]
     },
     {
+      "name": "claim",
+      "discriminator": [
+        62,
+        198,
+        214,
+        193,
+        213,
+        159,
+        108,
+        210
+      ],
+      "accounts": [
+        {
+          "name": "relayer",
+          "docs": [
+            "Fee payer; pays rent for the nullifier marker. Not bound by the proof."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "campaign"
+        },
+        {
+          "name": "nullifierAccount",
+          "docs": [
+            "`init` fails if this nullifier already claimed."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  110,
+                  117,
+                  108,
+                  108,
+                  105,
+                  102,
+                  105,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "campaign"
+              },
+              {
+                "kind": "arg",
+                "path": "nullifier"
+              }
+            ]
+          }
+        },
+        {
+          "name": "recipient"
+        },
+        {
+          "name": "recipientToken",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "recipient"
+              },
+              {
+                "kind": "account",
+                "path": "tokenProgram"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "relations": [
+            "campaign"
+          ]
+        },
+        {
+          "name": "mint",
+          "relations": [
+            "campaign"
+          ]
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associatedTokenProgram",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "proof",
+          "type": {
+            "array": [
+              "u8",
+              256
+            ]
+          }
+        },
+        {
+          "name": "nullifier",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "createCampaign",
       "discriminator": [
         111,
@@ -508,6 +672,19 @@ export type Zkclaim = {
       ]
     },
     {
+      "name": "nullifier",
+      "discriminator": [
+        18,
+        56,
+        142,
+        165,
+        181,
+        158,
+        187,
+        133
+      ]
+    },
+    {
       "name": "registration",
       "discriminator": [
         158,
@@ -546,6 +723,19 @@ export type Zkclaim = {
         229,
         191,
         200
+      ]
+    },
+    {
+      "name": "claimed",
+      "discriminator": [
+        217,
+        192,
+        123,
+        72,
+        108,
+        150,
+        248,
+        33
       ]
     },
     {
@@ -727,6 +917,30 @@ export type Zkclaim = {
       }
     },
     {
+      "name": "claimed",
+      "docs": [
+        "Deliberately carries no recipient, leaf index or commitment."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "campaign",
+            "type": "pubkey"
+          },
+          {
+            "name": "nullifier",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "counter",
       "type": {
         "kind": "struct",
@@ -746,6 +960,16 @@ export type Zkclaim = {
       "name": "eligible",
       "docs": [
         "Empty marker: its existence at [\"eligible\", campaign, wallet] means the wallet may register once."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": []
+      }
+    },
+    {
+      "name": "nullifier",
+      "docs": [
+        "Empty marker at [\"nullifier\", campaign, nullifier]: exists iff that nullifier has claimed."
       ],
       "type": {
         "kind": "struct",

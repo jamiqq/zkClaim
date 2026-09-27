@@ -43,4 +43,8 @@ pub mod zkclaim {
     pub fn freeze_campaign(ctx: Context<FreezeCampaign>) -> Result<()> {
         crate::instructions::freeze_campaign::handle_freeze_campaign(ctx)
     }
+
+    pub fn claim(ctx: Context<Claim>, proof: [u8; 256], nullifier: [u8; 32]) -> Result<()> {
+        crate::instructions::claim::handle_claim(ctx, proof, nullifier)
+    }
 }
