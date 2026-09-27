@@ -65,3 +65,15 @@ pub struct CampaignFrozen {
     pub root: [u8; 32],
     pub registrations: u32,
 }
+
+/// Empty marker at ["nullifier", campaign, nullifier]: exists iff that nullifier has claimed.
+#[account]
+#[derive(InitSpace)]
+pub struct Nullifier {}
+
+/// Deliberately carries no recipient, leaf index or commitment.
+#[event]
+pub struct Claimed {
+    pub campaign: Pubkey,
+    pub nullifier: [u8; 32],
+}

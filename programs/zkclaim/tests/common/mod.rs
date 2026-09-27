@@ -21,7 +21,7 @@ use {
     solana_program_pack::Pack,
     solana_signer::Signer,
     solana_transaction::versioned::VersionedTransaction,
-    zkclaim::constants::{CAMPAIGN_SEED, ELIGIBLE_SEED, REGISTRATION_SEED, TREE_SEED},
+    zkclaim::constants::{CAMPAIGN_SEED, ELIGIBLE_SEED, NULLIFIER_SEED, REGISTRATION_SEED, TREE_SEED},
 };
 
 pub const CAMPAIGN_ID: u64 = 42;
@@ -29,6 +29,7 @@ pub const AMOUNT: u64 = 1_000_000;
 
 pub struct Env {
     pub svm: LiteSVM,
+    pub campaign_id: u64,
     pub admin: Keypair,
     pub mint: Pubkey,
     pub campaign: Pubkey,
@@ -37,6 +38,10 @@ pub struct Env {
 }
 
 pub fn setup() -> Env {
+    setup_with_id(CAMPAIGN_ID)
+}
+
+pub fn setup_with_id(campaign_id: u64) -> Env {
     let mut svm = LiteSVM::new();
     let bytes = include_bytes!(concat!(
         env!("CARGO_TARGET_TMPDIR"),
@@ -72,16 +77,20 @@ pub fn setup() -> Env {
     )
     .unwrap();
 
-    let campaign = campaign_pda(CAMPAIGN_ID);
+    let campaign = campaign_pda(campaign_id);
     let tree = Pubkey::find_program_address(&[TREE_SEED, campaign.as_ref()], &zkclaim::id()).0;
     let vault = get_associated_token_address(&campaign, &mint);
 
-    Env { svm, admin, mint, campaign, tree, vault }
+    Env { svm, campaign_id, admin, mint, campaign, tree, vault }
 }
 
 /// `setup()` + a successful `create_campaign`.
 pub fn created() -> Env {
-    let mut env = setup();
+    created_with_id(CAMPAIGN_ID)
+}
+
+pub fn created_with_id(campaign_id: u64) -> Env {
+    let mut env = setup_with_id(campaign_id);
     let ix = create_campaign_ix(&env, AMOUNT);
     send(&mut env.svm, ix, &env.admin).unwrap();
     env
@@ -127,7 +136,7 @@ pub fn send_signed(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, others: 
 pub fn create_campaign_ix(env: &Env, amount: u64) -> Instruction {
     Instruction::new_with_bytes(
         zkclaim::id(),
-        &zkclaim::instruction::CreateCampaign { campaign_id: CAMPAIGN_ID, amount }.data(),
+        &zkclaim::instruction::CreateCampaign { campaign_id: env.campaign_id, amount }.data(),
         zkclaim::accounts::CreateCampaign {
             admin: env.admin.pubkey(),
             campaign: env.campaign,
@@ -203,4 +212,77 @@ pub fn freeze_campaign_ix(env: &Env, signer: &Pubkey) -> Instruction {
         }
         .to_account_metas(None),
     )
+}
+
+pub fn nullifier_pda(campaign: &Pubkey, nullifier: &[u8; 32]) -> Pubkey {
+    Pubkey::find_program_address(&[NULLIFIER_SEED, campaign.as_ref(), nullifier], &zkclaim::id()).0
+}
+
+pub fn claim_ix(env: &Env, relayer: &Pubkey, recipient: &Pubkey, proof: [u8; 256], nullifier: [u8; 32]) -> Instruction {
+    Instruction::new_with_bytes(
+        zkclaim::id(),
+        &zkclaim::instruction::Claim { proof, nullifier }.data(),
+        zkclaim::accounts::Claim {
+            relayer: *relayer,
+            campaign: env.campaign,
+            nullifier_account: nullifier_pda(&env.campaign, &nullifier),
+            recipient: *recipient,
+            recipient_token: get_associated_token_address(recipient, &env.mint),
+            vault: env.vault,
+            mint: env.mint,
+            token_program: token::ID,
+            associated_token_program: associated_token::ID,
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// ComputeBudget SetComputeUnitLimit, built by hand to avoid another dependency.
+pub fn compute_limit_ix(units: u32) -> Instruction {
+    let mut data = vec![2u8];
+    data.extend_from_slice(&units.to_le_bytes());
+    Instruction::new_with_bytes(COMPUTE_BUDGET_ID, &data, vec![])
+}
+
+pub const COMPUTE_BUDGET_ID: Pubkey =
+    Pubkey::from_str_const("ComputeBudget111111111111111111111111111111");
+
+/// Writes the vault's SPL balance directly (stands in for the admin's funding transfer).
+pub fn fund_vault(env: &mut Env, amount: u64) {
+    let acc = env.svm.get_account(&env.vault).unwrap();
+    let mut state = spl_token::state::Account::unpack(&acc.data).unwrap();
+    state.amount = amount;
+    let mut data = acc.data.clone();
+    spl_token::state::Account::pack(state, &mut data).unwrap();
+    env.svm.set_account(env.vault, Account { data, ..acc }).unwrap();
+}
+
+pub fn token_balance(env: &Env, token_account: &Pubkey) -> u64 {
+    let acc = env.svm.get_account(token_account).unwrap();
+    spl_token::state::Account::unpack(&acc.data).unwrap().amount
+}
+
+pub fn from_hex32(s: &str) -> [u8; 32] {
+    let s = s.trim_start_matches("0x");
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap();
+    }
+    out
+}
+
+/// Decimal field element (as in snarkjs JSON) -> 32-byte big-endian.
+pub fn dec_to_be32(s: &str) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for digit in s.bytes() {
+        let mut carry = (digit - b'0') as u32;
+        for byte in out.iter_mut().rev() {
+            let v = *byte as u32 * 10 + carry;
+            *byte = v as u8;
+            carry = v >> 8;
+        }
+        assert_eq!(carry, 0, "value exceeds 32 bytes");
+    }
+    out
 }
