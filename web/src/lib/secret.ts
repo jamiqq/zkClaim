@@ -66,10 +66,21 @@ export async function parseBackup(text: string): Promise<Backup> {
   if (b?.app !== 'zkclaim' || !b.secret || !b.campaignId) {
     throw new Error('This is not a zkClaim backup file')
   }
-  if (toHex32(await commitmentOf(BigInt(b.secret))) !== b.commitment) {
+  // Accept decimal or 0x-hex numbers (scripts write decimal, the web app writes hex); normalize to hex.
+  const secret = BigInt(b.secret)
+  const commitment = await commitmentOf(secret)
+  if (b.commitment !== undefined && BigInt(b.commitment) !== commitment) {
     throw new Error('Backup file is corrupted: secret does not match commitment')
   }
-  return b as Backup
+  return {
+    app: 'zkclaim',
+    version: 1,
+    campaignId: String(b.campaignId),
+    wallet: b.wallet ?? '(unknown)',
+    secret: toHex32(secret),
+    commitment: toHex32(commitment),
+    createdAt: b.createdAt ?? new Date().toISOString(),
+  }
 }
 
 const key = (campaignId: string, wallet: string) => `zkclaim:${campaignId}:${wallet}`

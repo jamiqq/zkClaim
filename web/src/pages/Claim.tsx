@@ -13,7 +13,7 @@ type AttackResult = { name: string; ok: boolean; detail: string }
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 function friendly(m: string) {
-  if (/already in use|already claimed/i.test(m)) return 'Already claimed: this nullifier is already on-chain.'
+  if (/already in use|already claimed|already used/i.test(m)) return 'Already claimed: this nullifier is already on-chain.'
   if (/ProofInvalid|proof.*(invalid|rejected)|verif/i.test(m)) return 'Proof rejected by the program (ProofInvalid).'
   if (/custom program error/i.test(m)) return 'Rejected by the program: ' + m.slice(0, 160)
   if (/NotFrozen/i.test(m)) return 'Claims are not open yet: the campaign is not frozen.'
@@ -151,7 +151,11 @@ export default function Claim() {
       await api.submitClaim({ ...proved, recipient: recipientOverride ?? proved.recipient, campaignId: CAMPAIGN_ID })
       setAttacks((a) => [...a, { name, ok: false, detail: 'Accepted — this should NOT happen' }])
     } catch (e) {
-      setAttacks((a) => [...a, { name, ok: true, detail: friendly(msg(e)) }])
+      const m = friendly(msg(e))
+      const detail = recipientOverride && /claim submission failed/i.test(m)
+        ? 'Rejected on-chain: the proof is bound to a different recipient (ProofInvalid).'
+        : m
+      setAttacks((a) => [...a, { name, ok: true, detail }])
     } finally {
       setStage('idle')
     }
