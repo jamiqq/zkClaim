@@ -17,6 +17,11 @@ const validRequest = {
 };
 
 assert.deepEqual(validateClaimRequest(validRequest), []);
+assert.deepEqual(validateClaimRequest({
+  ...validRequest,
+  proof: "00".repeat(256),
+  nullifier: "01".repeat(32),
+}), []);
 assert.ok(validateClaimRequest({ ...validRequest, campaign: Number.MAX_SAFE_INTEGER + 1 })
   .includes("campaign must be a safe integer or decimal string"));
 assert.ok(validateClaimRequest({ ...validRequest, recipient: "not-a-public-key" })

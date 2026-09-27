@@ -21,8 +21,8 @@ import express, { type Express, type Request, type Response } from "express";
 const FIELD_MODULUS =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 const MAX_U64 = (1n << 64n) - 1n;
-const HEX_32_BYTES = /^0x[0-9a-fA-F]{64}$/;
-const HEX_256_BYTES = /^0x[0-9a-fA-F]{512}$/;
+const HEX_32_BYTES = /^(?:0x)?[0-9a-fA-F]{64}$/;
+const HEX_256_BYTES = /^(?:0x)?[0-9a-fA-F]{512}$/;
 const DEFAULT_ORIGIN = "http://localhost:5173";
 
 export type ClaimRequest = {
@@ -57,6 +57,10 @@ function parseCampaign(value: string | number | undefined): bigint {
   return campaign;
 }
 
+function stripHexPrefix(value: string): string {
+  return value.startsWith("0x") ? value.slice(2) : value;
+}
+
 export function validateClaimRequest(value: unknown): string[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return ["body must be a JSON object"];
@@ -71,12 +75,12 @@ export function validateClaimRequest(value: unknown): string[] {
     body.proof.length === 256 &&
     body.proof.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
   if (!proofIsHex && !proofIsBytes) {
-    errors.push("proof must be 256 bytes or a 0x-prefixed 256-byte hex string");
+    errors.push("proof must be 256 bytes or a 256-byte hex string");
   }
 
   if (typeof body.nullifier !== "string" || !HEX_32_BYTES.test(body.nullifier)) {
-    errors.push("nullifier must be a 0x-prefixed 32-byte hex string");
-  } else if (BigInt(body.nullifier) >= FIELD_MODULUS) {
+    errors.push("nullifier must be a 32-byte hex string");
+  } else if (BigInt(`0x${stripHexPrefix(body.nullifier)}`) >= FIELD_MODULUS) {
     errors.push("nullifier must be smaller than the BN254 scalar field modulus");
   }
 
@@ -102,9 +106,9 @@ export function validateClaimRequest(value: unknown): string[] {
 export function normalizeClaimRequest(body: ClaimRequest): NormalizedClaim {
   return {
     proof: typeof body.proof === "string"
-      ? Buffer.from(body.proof.slice(2), "hex")
+      ? Buffer.from(stripHexPrefix(body.proof), "hex")
       : Buffer.from(body.proof),
-    nullifier: Buffer.from(body.nullifier.slice(2), "hex"),
+    nullifier: Buffer.from(stripHexPrefix(body.nullifier), "hex"),
     recipient: new PublicKey(body.recipient),
     campaignId: parseCampaign(body.campaign),
   };
