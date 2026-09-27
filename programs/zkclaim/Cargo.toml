@@ -24,7 +24,7 @@ custom-panic = []
 anchor-lang = "1.1.2"
 anchor-spl = "1.1.2"
 bytemuck = { version = "1.25.2", features = ["derive", "min_const_generics"] }
-groth16-solana = "0.2.0"
+groth16-solana = "=0.2.0"
 solana-poseidon = { version = "3.1.14", features = ["agave-unstable-api"] }
 
 [dev-dependencies]
