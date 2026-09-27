@@ -1,7 +1,21 @@
-import { randomUUID } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { PublicKey } from "@solana/web3.js";
+import * as anchor from "@coral-xyz/anchor";
+import {
+  ComputeBudgetProgram,
+  Connection,
+  Keypair,
+  PublicKey,
+} from "@solana/web3.js";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import express, { type Express, type Request, type Response } from "express";
 
 const FIELD_MODULUS =
@@ -9,6 +23,7 @@ const FIELD_MODULUS =
 const MAX_U64 = (1n << 64n) - 1n;
 const HEX_32_BYTES = /^0x[0-9a-fA-F]{64}$/;
 const HEX_256_BYTES = /^0x[0-9a-fA-F]{512}$/;
+const DEFAULT_ORIGIN = "http://localhost:5173";
 
 export type ClaimRequest = {
   proof: string | number[];
@@ -16,6 +31,31 @@ export type ClaimRequest = {
   recipient: string;
   campaign: string | number;
 };
+
+export type NormalizedClaim = {
+  proof: Buffer;
+  nullifier: Buffer;
+  recipient: PublicKey;
+  campaignId: bigint;
+};
+
+export type ClaimSubmitter = (claim: NormalizedClaim) => Promise<string>;
+
+type AppOptions = {
+  submitClaim: ClaimSubmitter;
+  allowedOrigin?: string;
+};
+
+function parseCampaign(value: string | number | undefined): bigint {
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new Error("campaign must be a safe integer or decimal string");
+  }
+  const campaign = BigInt(value as string | number);
+  if (campaign < 0n || campaign > MAX_U64) {
+    throw new Error("campaign must fit in an unsigned 64-bit integer");
+  }
+  return campaign;
+}
 
 export function validateClaimRequest(value: unknown): string[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -51,34 +91,138 @@ export function validateClaimRequest(value: unknown): string[] {
   }
 
   try {
-    const campaign = BigInt(body.campaign as string | number);
-    if (campaign < 0n || campaign > MAX_U64) {
-      errors.push("campaign must fit in an unsigned 64-bit integer");
-    }
-  } catch {
-    errors.push("campaign must be an unsigned integer");
+    parseCampaign(body.campaign);
+  } catch (error: unknown) {
+    errors.push(error instanceof Error ? error.message : "campaign must be an unsigned integer");
   }
 
   return errors;
 }
 
-export function createApp(): Express {
+export function normalizeClaimRequest(body: ClaimRequest): NormalizedClaim {
+  return {
+    proof: typeof body.proof === "string"
+      ? Buffer.from(body.proof.slice(2), "hex")
+      : Buffer.from(body.proof),
+    nullifier: Buffer.from(body.nullifier.slice(2), "hex"),
+    recipient: new PublicKey(body.recipient),
+    campaignId: parseCampaign(body.campaign),
+  };
+}
+
+function u64le(value: bigint): Buffer {
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64LE(value);
+  return bytes;
+}
+
+function loadRelayerKeypair(): Keypair {
+  const keypairPath = process.env.RELAYER_KEYPAIR ??
+    resolve(homedir(), ".config", "solana", "id.json");
+  const secretKey = JSON.parse(readFileSync(keypairPath, "utf8")) as number[];
+  return Keypair.fromSecretKey(Uint8Array.from(secretKey));
+}
+
+export function createLiveSubmitter(): ClaimSubmitter {
+  const rpcUrl = process.env.RPC_URL;
+  if (!rpcUrl) {
+    throw new Error("RPC_URL is required");
+  }
+
+  const sourceDirectory = dirname(fileURLToPath(import.meta.url));
+  const idlPath = resolve(sourceDirectory, "../../shared/idl/zkclaim.json");
+  const idl = JSON.parse(readFileSync(idlPath, "utf8")) as anchor.Idl;
+  const programId = new PublicKey(idl.address);
+  const relayer = loadRelayerKeypair();
+  const connection = new Connection(rpcUrl, "confirmed");
+  const provider = new anchor.AnchorProvider(
+    connection,
+    new anchor.Wallet(relayer),
+    { commitment: "confirmed" },
+  );
+  const program = new anchor.Program(idl, provider) as anchor.Program & {
+    account: { campaign: { fetch(address: PublicKey): Promise<{ mint: PublicKey }> } };
+  };
+
+  const pda = (seeds: Buffer[]): PublicKey =>
+    PublicKey.findProgramAddressSync(seeds, programId)[0];
+
+  return async ({ proof, nullifier, recipient, campaignId }): Promise<string> => {
+    const campaign = pda([Buffer.from("campaign"), u64le(campaignId)]);
+    const campaignAccount = await program.account.campaign.fetch(campaign);
+    const mint = new PublicKey(campaignAccount.mint);
+    const recipientToken = getAssociatedTokenAddressSync(mint, recipient);
+
+    return program.methods
+      .claim(Array.from(proof), Array.from(nullifier))
+      .accountsPartial({
+        relayer: relayer.publicKey,
+        campaign,
+        nullifierAccount: pda([
+          Buffer.from("nullifier"),
+          campaign.toBuffer(),
+          nullifier,
+        ]),
+        recipient,
+        recipientToken,
+        vault: getAssociatedTokenAddressSync(mint, campaign, true),
+        mint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      })
+      .preInstructions([
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+        createAssociatedTokenAccountIdempotentInstruction(
+          relayer.publicKey,
+          recipientToken,
+          recipient,
+          mint,
+        ),
+      ])
+      .rpc();
+  };
+}
+
+export function createApp({ submitClaim, allowedOrigin = DEFAULT_ORIGIN }: AppOptions): Express {
   const app = express();
   app.disable("x-powered-by");
+  app.use((request: Request, response: Response, next) => {
+    response.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    if (request.method === "OPTIONS") {
+      response.sendStatus(204);
+      return;
+    }
+    next();
+  });
   app.use(express.json({ limit: "32kb" }));
 
   app.get("/health", (_request: Request, response: Response) => {
-    response.json({ ok: true, mode: "mock" });
+    response.json({ ok: true, mode: "live" });
   });
 
-  app.post("/claim", (request: Request, response: Response) => {
+  app.post("/claim", async (request: Request, response: Response) => {
     const errors = validateClaimRequest(request.body);
     if (errors.length > 0) {
       response.status(400).json({ error: "invalid claim request", details: errors });
       return;
     }
 
-    response.json({ signature: `mock-${randomUUID()}` });
+    try {
+      const signature = await submitClaim(normalizeClaimRequest(request.body as ClaimRequest));
+      response.json({
+        signature,
+        explorerUrl: `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("claim submission failed:", message.split("\n")[0]);
+      const alreadyUsed = /already in use/i.test(message);
+      response.status(alreadyUsed ? 409 : 502).json({
+        error: alreadyUsed ? "nullifier already used" : "claim submission failed",
+      });
+    }
   });
 
   return app;
@@ -86,8 +230,18 @@ export function createApp(): Express {
 
 const entrypoint = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 if (import.meta.url === entrypoint) {
-  const port = Number(process.env.PORT ?? 8787);
-  createApp().listen(port, "127.0.0.1", () => {
-    console.log(`zkClaim relayer mock listening on http://127.0.0.1:${port}`);
-  });
+  try {
+    const port = Number(process.env.PORT ?? 8787);
+    const host = process.env.HOST ?? "127.0.0.1";
+    const app = createApp({
+      submitClaim: createLiveSubmitter(),
+      allowedOrigin: process.env.WEB_ORIGIN ?? DEFAULT_ORIGIN,
+    });
+    app.listen(port, host, () => {
+      console.log(`zkClaim relayer listening on http://${host}:${port}`);
+    });
+  } catch (error: unknown) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  }
 }
