@@ -1,145 +1,17 @@
+mod common;
+
 use {
-    anchor_lang::{
-        prelude::Pubkey,
-        solana_program::{
-            instruction::{AccountMeta, Instruction},
-            system_program,
-        },
-        AccountDeserialize, Discriminator, InstructionData, ToAccountMetas,
-    },
-    anchor_spl::{
-        associated_token::{self, get_associated_token_address},
-        token::{self, spl_token},
-    },
-    litesvm::LiteSVM,
-    solana_account::Account,
+    anchor_lang::{prelude::Pubkey, AccountDeserialize, Discriminator},
+    anchor_spl::token::{self, spl_token},
+    common::*,
     solana_keypair::Keypair,
-    solana_message::{Message, VersionedMessage},
-    solana_program_option::COption,
     solana_program_pack::Pack,
     solana_signer::Signer,
-    solana_transaction::versioned::VersionedTransaction,
     zkclaim::{
-        constants::{CAMPAIGN_SEED, ELIGIBLE_SEED, TREE_DEPTH, TREE_SEED, ZEROS},
+        constants::{TREE_DEPTH, ZEROS},
         state::{Campaign, CampaignState, Eligible, Tree},
     },
 };
-
-const CAMPAIGN_ID: u64 = 42;
-const AMOUNT: u64 = 1_000_000;
-
-struct Env {
-    svm: LiteSVM,
-    admin: Keypair,
-    mint: Pubkey,
-    campaign: Pubkey,
-    tree: Pubkey,
-    vault: Pubkey,
-}
-
-fn setup() -> Env {
-    let mut svm = LiteSVM::new();
-    let bytes = include_bytes!(concat!(
-        env!("CARGO_TARGET_TMPDIR"),
-        "/../deploy/zkclaim.so"
-    ));
-    svm.add_program(zkclaim::id(), bytes).unwrap();
-
-    let admin = Keypair::new();
-    svm.airdrop(&admin.pubkey(), 10_000_000_000).unwrap();
-
-    let mint = Pubkey::new_unique();
-    let mut data = [0u8; spl_token::state::Mint::LEN];
-    spl_token::state::Mint::pack(
-        spl_token::state::Mint {
-            mint_authority: COption::Some(admin.pubkey()),
-            supply: 0,
-            decimals: 6,
-            is_initialized: true,
-            freeze_authority: COption::None,
-        },
-        &mut data,
-    )
-    .unwrap();
-    svm.set_account(
-        mint,
-        Account {
-            lamports: 1_000_000_000,
-            data: data.to_vec(),
-            owner: token::ID,
-            executable: false,
-            rent_epoch: 0,
-        },
-    )
-    .unwrap();
-
-    let campaign = campaign_pda(CAMPAIGN_ID);
-    let tree = Pubkey::find_program_address(&[TREE_SEED, campaign.as_ref()], &zkclaim::id()).0;
-    let vault = get_associated_token_address(&campaign, &mint);
-
-    Env { svm, admin, mint, campaign, tree, vault }
-}
-
-fn campaign_pda(campaign_id: u64) -> Pubkey {
-    Pubkey::find_program_address(&[CAMPAIGN_SEED, &campaign_id.to_le_bytes()], &zkclaim::id()).0
-}
-
-fn eligible_pda(campaign: &Pubkey, wallet: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(
-        &[ELIGIBLE_SEED, campaign.as_ref(), wallet.as_ref()],
-        &zkclaim::id(),
-    )
-    .0
-}
-
-fn send(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair) -> Result<(), String> {
-    let blockhash = svm.latest_blockhash();
-    let msg = Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &blockhash);
-    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[payer]).unwrap();
-    svm.send_transaction(tx)
-        .map(|meta| println!("CU consumed: {}", meta.compute_units_consumed))
-        .map_err(|e| format!("{:?}\n{}", e.err, e.meta.logs.join("\n")))
-}
-
-fn create_campaign_ix(env: &Env, amount: u64) -> Instruction {
-    Instruction::new_with_bytes(
-        zkclaim::id(),
-        &zkclaim::instruction::CreateCampaign { campaign_id: CAMPAIGN_ID, amount }.data(),
-        zkclaim::accounts::CreateCampaign {
-            admin: env.admin.pubkey(),
-            campaign: env.campaign,
-            tree: env.tree,
-            mint: env.mint,
-            vault: env.vault,
-            token_program: token::ID,
-            associated_token_program: associated_token::ID,
-            system_program: system_program::ID,
-        }
-        .to_account_metas(None),
-    )
-}
-
-fn add_eligible_ix(env: &Env, signer: &Pubkey, wallets: &[Pubkey], eligibles: &[Pubkey]) -> Instruction {
-    let mut metas = zkclaim::accounts::AddEligible {
-        admin: *signer,
-        campaign: env.campaign,
-        system_program: system_program::ID,
-    }
-    .to_account_metas(None);
-    metas.extend(eligibles.iter().map(|e| AccountMeta::new(*e, false)));
-    Instruction::new_with_bytes(
-        zkclaim::id(),
-        &zkclaim::instruction::AddEligible { wallets: wallets.to_vec() }.data(),
-        metas,
-    )
-}
-
-fn created() -> Env {
-    let mut env = setup();
-    let ix = create_campaign_ix(&env, AMOUNT);
-    send(&mut env.svm, ix, &env.admin).unwrap();
-    env
-}
 
 #[test]
 fn create_campaign_initializes_state() {
@@ -180,7 +52,6 @@ fn create_campaign_rejects_zero_amount_and_duplicates() {
 
     let ix = create_campaign_ix(&env, AMOUNT);
     send(&mut env.svm, ix, &env.admin).unwrap();
-    env.svm.expire_blockhash();
     let ix = create_campaign_ix(&env, AMOUNT);
     assert!(send(&mut env.svm, ix, &env.admin).is_err());
 }
@@ -235,7 +106,6 @@ fn add_eligible_rejects_duplicate_wallet() {
 
     let ix = add_eligible_ix(&env, &env.admin.pubkey(), &[wallet], &[eligible]);
     send(&mut env.svm, ix, &env.admin).unwrap();
-    env.svm.expire_blockhash();
     let ix = add_eligible_ix(&env, &env.admin.pubkey(), &[wallet], &[eligible]);
     assert!(send(&mut env.svm, ix, &env.admin).unwrap_err().contains("AlreadyEligible"));
 }
