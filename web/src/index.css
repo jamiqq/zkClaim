@@ -14,3 +14,33 @@ body { margin: 0; }
 .app nav a { color: #8a8f98; text-decoration: none; }
 .app nav a.active { color: #fff; font-weight: 600; }
 main { max-width: 900px; margin: 0 auto; padding: 24px; }
+
+h1 { margin: 0 0 8px; }
+h2 { font-size: 16px; margin: 0 0 6px; }
+.muted { color: #8a8f98; }
+.note { background: #2a2410; color: #e8c65a; padding: 6px 10px; border-radius: 6px; font-size: 13px; }
+.card { background: #161920; border: 1px solid #23262d; border-radius: 10px; padding: 16px; margin: 12px 0; }
+.card p { color: #b4b8c0; margin: 0 0 12px; }
+.card.ok { border-color: #1f6f43; }
+.steps { list-style: none; padding: 0; margin: 0; }
+button {
+  background: #512da8; color: #fff; border: 0; border-radius: 6px;
+  padding: 8px 14px; font: inherit; cursor: pointer; margin-right: 12px;
+}
+button:disabled { opacity: .4; cursor: not-allowed; }
+label { display: inline-flex; align-items: center; gap: 6px; }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; margin-top: 10px !important; }
+.warn { color: #e8c65a !important; }
+.error { color: #ff6b6b; }
+a { color: #9d7cff; }
+
+input[type='text'] {
+  background: #0f1115; color: #e6e6e6; border: 1px solid #2c3039; border-radius: 6px;
+  padding: 8px 10px; font: inherit;
+}
+input.wide { width: 100%; box-sizing: border-box; margin-bottom: 8px; }
+button.link { background: none; color: #9d7cff; padding: 0; margin-right: 10px; text-decoration: underline; }
+.small { font-size: 13px; }
+.attacks { list-style: none; padding: 0; margin: 12px 0 0; }
+.attacks li { font-family: ui-monospace, Menlo, monospace; font-size: 13px; padding: 4px 0; }
+.rejected { color: #4ade80; }
