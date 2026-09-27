@@ -1,13 +1,6 @@
 use anchor_lang::prelude::*;
 use crate::constants::{MAX_LEAVES, TREE_DEPTH};
 
-#[account]
-#[derive(InitSpace)]
-pub struct Counter {
-    pub count: u64,
-    pub authority: Pubkey,
-}
-
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
 pub enum CampaignState {
     Registering,

@@ -405,91 +405,6 @@
       "args": []
     },
     {
-      "name": "increment",
-      "discriminator": [
-        11,
-        18,
-        104,
-        9,
-        104,
-        174,
-        59,
-        33
-      ],
-      "accounts": [
-        {
-          "name": "counter",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  117,
-                  110,
-                  116,
-                  101,
-                  114
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "authority",
-          "signer": true
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "initialize",
-      "discriminator": [
-        175,
-        175,
-        109,
-        31,
-        13,
-        152,
-        155,
-        237
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "counter",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  117,
-                  110,
-                  116,
-                  101,
-                  114
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "register",
       "discriminator": [
         211,
@@ -640,19 +555,6 @@
       ]
     },
     {
-      "name": "Counter",
-      "discriminator": [
-        255,
-        176,
-        4,
-        245,
-        188,
-        253,
-        124,
-        25
-      ]
-    },
-    {
       "name": "Eligible",
       "discriminator": [
         97,
@@ -754,66 +656,61 @@
     },
     {
       "code": 6001,
-      "name": "CounterOverflow",
-      "msg": "Counter has reached the maximum value"
-    },
-    {
-      "code": 6002,
       "name": "NotRegistering",
       "msg": "Campaign is not in the Registering state"
     },
     {
-      "code": 6003,
+      "code": 6002,
       "name": "NotFrozen",
       "msg": "Campaign is not in the Frozen state"
     },
     {
-      "code": 6004,
+      "code": 6003,
       "name": "TreeFull",
       "msg": "Merkle tree is full"
     },
     {
-      "code": 6005,
+      "code": 6004,
       "name": "InvalidCommitment",
       "msg": "Commitment must be non-zero and below the BN254 modulus"
     },
     {
-      "code": 6006,
+      "code": 6005,
       "name": "InvalidNullifier",
       "msg": "Nullifier must be below the BN254 modulus"
     },
     {
-      "code": 6007,
+      "code": 6006,
       "name": "ProofInvalid",
       "msg": "Groth16 proof verification failed"
     },
     {
-      "code": 6008,
+      "code": 6007,
       "name": "InvalidAmount",
       "msg": "Claim amount must be greater than zero"
     },
     {
-      "code": 6009,
+      "code": 6008,
       "name": "EligibleCountMismatch",
       "msg": "Wallet list must be non-empty and match the remaining accounts one-to-one"
     },
     {
-      "code": 6010,
+      "code": 6009,
       "name": "InvalidEligibleAccount",
       "msg": "Remaining account is not the Eligible PDA for this campaign and wallet"
     },
     {
-      "code": 6011,
+      "code": 6010,
       "name": "AlreadyEligible",
       "msg": "Wallet is already eligible for this campaign"
     },
     {
-      "code": 6012,
+      "code": 6011,
       "name": "PoseidonFailed",
       "msg": "Poseidon hash syscall failed"
     },
     {
-      "code": 6013,
+      "code": 6012,
       "name": "NoRegistrations",
       "msg": "Cannot freeze a campaign with no registrations"
     }
@@ -930,22 +827,6 @@
                 32
               ]
             }
-          }
-        ]
-      }
-    },
-    {
-      "name": "Counter",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "count",
-            "type": "u64"
-          },
-          {
-            "name": "authority",
-            "type": "pubkey"
           }
         ]
       }
@@ -1075,24 +956,9 @@
       "value": "[99, 97, 109, 112, 97, 105, 103, 110]"
     },
     {
-      "name": "COUNTER_SEED",
-      "type": "bytes",
-      "value": "[99, 111, 117, 110, 116, 101, 114]"
-    },
-    {
       "name": "ELIGIBLE_SEED",
       "type": "bytes",
       "value": "[101, 108, 105, 103, 105, 98, 108, 101]"
-    },
-    {
-      "name": "HELLO_WORLD_LAMPORTS",
-      "type": "u64",
-      "value": "1"
-    },
-    {
-      "name": "MAX_COUNT",
-      "type": "u64",
-      "value": "10"
     },
     {
       "name": "NULLIFIER_SEED",
