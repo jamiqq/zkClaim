@@ -15,3 +15,4 @@ circuits/*.ptau
 scripts/demo-secrets.json
 scripts/.recipients/
 scripts/.last-claim.json
+scripts/relayer-test-proof-*.json
