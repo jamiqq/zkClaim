@@ -109,6 +109,9 @@ export default function Claim() {
       setStage('path')
       const path = await api.getMerklePath(connection, CAMPAIGN_ID, BigInt(backup.commitment))
       const nullifier = await nullifierOf(secret, CAMPAIGN_ID)
+      if (await api.isClaimed(connection, CAMPAIGN_ID, nullifier)) {
+        throw new Error('This secret has already been claimed in this campaign (its nullifier is on-chain). Use another entry.')
+      }
       setStage('proving')
       if (hasProver) {
         const r = await prove(buildInput({ secret, campaignId: CAMPAIGN_ID, recipient, path, nullifier }))

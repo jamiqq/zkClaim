@@ -82,6 +82,13 @@ export async function merklePath(leaves: bigint[], index: number) {
   return { root: layer[0], pathElements, pathIndices }
 }
 
+/** True if this nullifier already claimed (its marker account exists on-chain). */
+export async function isClaimed(connection: Connection, id: bigint, nullifier: bigint): Promise<boolean> {
+  if (!LIVE.claim) return false
+  const info = await connection.getAccountInfo(nullifierPda(campaignPda(id), bigIntToBytes32(nullifier)), 'confirmed')
+  return info !== null
+}
+
 /** 100000000n, 6 -> "100" */
 export function fmtTokens(x: bigint, decimals: number) {
   if (decimals === 0) return x.toString()
