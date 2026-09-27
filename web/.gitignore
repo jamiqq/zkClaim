@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# zkClaim: never commit
+*.zkclaim
+.env
+.env.*
+*keypair*.json
+id.json
