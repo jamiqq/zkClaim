@@ -4520,6 +4520,7 @@ dependencies = [
  "bytemuck",
  "groth16-solana",
  "litesvm",
+ "serde_json",
  "solana-account",
  "solana-keypair",
  "solana-message",
