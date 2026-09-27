@@ -28,4 +28,6 @@ pub enum ErrorCode {
     AlreadyEligible,
     #[msg("Poseidon hash syscall failed")]
     PoseidonFailed,
+    #[msg("Cannot freeze a campaign with no registrations")]
+    NoRegistrations,
 }

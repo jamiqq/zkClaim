@@ -58,3 +58,10 @@ pub struct Registered {
     pub commitment: [u8; 32],
     pub root: [u8; 32],
 }
+
+#[event]
+pub struct CampaignFrozen {
+    pub campaign: Pubkey,
+    pub root: [u8; 32],
+    pub registrations: u32,
+}

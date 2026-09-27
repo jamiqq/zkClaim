@@ -180,3 +180,16 @@ pub fn eligible_user(env: &mut Env) -> Keypair {
     send(&mut env.svm, ix, &env.admin).unwrap();
     user
 }
+
+pub fn freeze_campaign_ix(env: &Env, signer: &Pubkey) -> Instruction {
+    Instruction::new_with_bytes(
+        zkclaim::id(),
+        &zkclaim::instruction::FreezeCampaign {}.data(),
+        zkclaim::accounts::FreezeCampaign {
+            admin: *signer,
+            campaign: env.campaign,
+            tree: env.tree,
+        }
+        .to_account_metas(None),
+    )
+}

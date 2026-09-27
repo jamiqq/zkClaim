@@ -37,4 +37,8 @@ pub mod zkclaim {
     pub fn register(ctx: Context<Register>, commitment: [u8; 32]) -> Result<()> {
         crate::instructions::register::handle_register(ctx, commitment)
     }
+
+    pub fn freeze_campaign(ctx: Context<FreezeCampaign>) -> Result<()> {
+        crate::instructions::freeze_campaign::handle_freeze_campaign(ctx)
+    }
 }

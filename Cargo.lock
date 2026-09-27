@@ -4523,6 +4523,7 @@ dependencies = [
  "solana-account",
  "solana-keypair",
  "solana-message",
+ "solana-poseidon",
  "solana-program-option",
  "solana-program-pack",
  "solana-signer",

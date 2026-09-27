@@ -1,14 +1,13 @@
 mod common;
 
 use {
-    anchor_lang::{prelude::Pubkey, AccountDeserialize, AccountSerialize},
+    anchor_lang::prelude::Pubkey,
     common::*,
-    solana_account::Account,
     solana_poseidon::{hashv, Endianness, Parameters},
     solana_signer::Signer,
     zkclaim::{
         constants::{FIELD_MODULUS_BE, MAX_LEAVES, TREE_DEPTH, ZEROS},
-        state::{Campaign, CampaignState, Tree},
+        state::Tree,
     },
 };
 
@@ -194,18 +193,19 @@ fn register_rejects_invalid_commitments() {
 }
 
 #[test]
-fn register_rejects_when_frozen() {
+fn register_open_then_frozen_rejects() {
     let mut env = created();
-    let user = eligible_user(&mut env);
+    let early = eligible_user(&mut env);
+    let late = eligible_user(&mut env);
 
-    // No freeze instruction yet: flip the state directly.
-    let acc = env.svm.get_account(&env.campaign).unwrap();
-    let mut campaign = Campaign::try_deserialize(&mut acc.data.as_slice()).unwrap();
-    campaign.state = CampaignState::Frozen;
-    let mut data = Vec::with_capacity(acc.data.len());
-    campaign.try_serialize(&mut data).unwrap();
-    env.svm.set_account(env.campaign, Account { data, ..acc }).unwrap();
+    let ix = register_ix(&env, &early.pubkey(), hex32(GOLDEN_LEAVES[0]));
+    send(&mut env.svm, ix, &early).unwrap();
 
-    let ix = register_ix(&env, &user.pubkey(), hex32(GOLDEN_LEAVES[0]));
-    assert!(send(&mut env.svm, ix, &user).unwrap_err().contains("NotRegistering"));
+    let ix = freeze_campaign_ix(&env, &env.admin.pubkey());
+    send(&mut env.svm, ix, &env.admin).unwrap();
+
+    let ix = register_ix(&env, &late.pubkey(), hex32(GOLDEN_LEAVES[1]));
+    assert!(send(&mut env.svm, ix, &late).unwrap_err().contains("NotRegistering"));
+    assert_eq!(read_tree(&env).next_index, 1);
+    assert_eq!(read_tree(&env).current_root, hex32(GOLDEN_ROOTS[0]));
 }
