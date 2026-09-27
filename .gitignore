@@ -13,3 +13,5 @@ test-ledger
 circuits/build/
 circuits/*.ptau
 scripts/demo-secrets.json
+scripts/.recipients/
+scripts/.last-claim.json
