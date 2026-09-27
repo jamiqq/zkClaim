@@ -21,24 +21,22 @@ export default function Explorer() {
   const [guess, setGuess] = useState<Registration | null>(null)
 
   async function reload() {
-    try {
-      const [c, r, cl] = await Promise.all([
-        api.getCampaign(connection, CAMPAIGN_ID),
-        api.getRegistrations(connection, CAMPAIGN_ID),
-        api.getClaims(connection, CAMPAIGN_ID),
-      ])
-      setCampaign(c)
-      setRegs(r)
-      setClaims(cl)
-      setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
+    // Load independently: a rate-limited history fetch must not hide the campaign, and vice versa.
+    const [c, r, cl] = await Promise.allSettled([
+      api.getCampaign(connection, CAMPAIGN_ID),
+      api.getRegistrations(connection, CAMPAIGN_ID),
+      api.getClaims(connection, CAMPAIGN_ID),
+    ])
+    if (c.status === 'fulfilled') setCampaign(c.value)
+    if (r.status === 'fulfilled') setRegs(r.value)
+    if (cl.status === 'fulfilled') setClaims(cl.value)
+    const failed = [c, r, cl].find((x) => x.status === 'rejected') as PromiseRejectedResult | undefined
+    setError(failed ? 'Could not load everything from devnet (will retry): ' + String(failed.reason?.message ?? failed.reason).slice(0, 120) : null)
   }
 
   useEffect(() => {
     reload()
-    const t = setInterval(reload, 10_000)
+    const t = setInterval(reload, 15_000)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection])

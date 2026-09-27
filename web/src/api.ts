@@ -1,6 +1,7 @@
 // Contract between the UI (P4) and the TS infra (P3).
 // Everything here is a MOCK for now; P3 replaces the bodies, the signatures stay.
-import { type Connection, PublicKey } from '@solana/web3.js'
+import { type Connection, type ParsedTransactionWithMeta, PublicKey } from '@solana/web3.js'
+import { utils as anchorUtils } from '@coral-xyz/anchor'
 import type { WalletContextState } from '@solana/wallet-adapter-react'
 import { PROGRAM_ID, RELAYER_URL, SEED_CAMPAIGN, SEED_NULLIFIER, SEED_TREE, TREE_DEPTH } from './config'
 import { poseidon } from './lib/poseidon'
@@ -14,7 +15,7 @@ export const LIVE = {
   claim: true, // submitClaim -> relayer
   register: false,
   admin: false,
-  explorer: false,
+  explorer: true, // registrations + claims from the campaign's transaction history
 }
 /** @deprecated use LIVE.* */
 export const MOCK = !LIVE.claim
@@ -80,6 +81,109 @@ export async function merklePath(leaves: bigint[], index: number) {
     idx >>= 1
   }
   return { root: layer[0], pathElements, pathIndices }
+}
+
+// ---------- Explorer: registrations + claims from tx history (IDL: shared/idl/zkclaim.json) ----------
+const IX_REGISTER = [211, 124, 67, 15, 211, 194, 178, 240] // accounts: user, payer, campaign, ...
+const IX_CLAIM = [62, 198, 214, 193, 213, 159, 108, 210] // accounts: relayer, campaign, nullifier_account, recipient, ...
+const EV_REGISTERED = [11, 222, 10, 72, 160, 110, 165, 227] // index u32 | commitment [32] | root [32]
+const EV_CLAIMED = [217, 192, 123, 72, 108, 150, 248, 33] // campaign pubkey | nullifier [32]
+const startsWith = (b: Uint8Array, d: number[]) => b.length >= d.length && d.every((x, i) => b[i] === x)
+const b64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+
+type Activity = { registration?: Registration; claim?: ClaimRecord }
+
+/** Pure: one parsed transaction -> the registration or claim it contains (if any). */
+export function decodeActivity(tx: ParsedTransactionWithMeta, signature: string): Activity {
+  if (!tx.meta || tx.meta.err) return {}
+  const events = (tx.meta.logMessages ?? [])
+    .filter((l) => l.startsWith('Program data: '))
+    .map((l) => b64(l.slice('Program data: '.length)))
+  const ix = tx.transaction.message.instructions.find(
+    (i) => i.programId.equals(programId) && 'data' in i,
+  ) as { accounts: PublicKey[]; data: string } | undefined
+  const ixData = ix ? anchorUtils.bytes.bs58.decode(ix.data) : new Uint8Array()
+  const time = tx.blockTime ?? null
+
+  const reg = events.find((e) => startsWith(e, EV_REGISTERED))
+  if (reg) {
+    const dv = new DataView(reg.buffer, reg.byteOffset, reg.byteLength)
+    return {
+      registration: {
+        index: dv.getUint32(8, true),
+        wallet: ix && startsWith(ixData, IX_REGISTER) ? ix.accounts[0].toBase58() : '?',
+        commitment: '0x' + toHex(reg.subarray(12, 44)),
+        signature,
+        time,
+      },
+    }
+  }
+  const cl = events.find((e) => startsWith(e, EV_CLAIMED))
+  if (cl) {
+    return {
+      claim: {
+        nullifier: '0x' + toHex(cl.subarray(40, 72)),
+        recipient: ix && startsWith(ixData, IX_CLAIM) ? ix.accounts[3].toBase58() : '?',
+        signature,
+        time,
+      },
+    }
+  }
+  return {}
+}
+
+async function withRetry<T>(fn: () => Promise<T>, tries = 5): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn()
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e)
+      if (i >= tries - 1 || !/429|413|Too many requests|rate/i.test(m)) throw e
+      await sleep(400 * 2 ** i)
+    }
+  }
+}
+
+const activityCache = new Map<string, Activity>() // signature -> decoded (txs never change once confirmed)
+
+let activityInflight: { at: number; id: bigint; p: ReturnType<typeof readActivityUncached> } | null = null
+function readActivity(connection: Connection, id: bigint) {
+  // getRegistrations + getClaims are called together: share one fetch for 3 s
+  if (activityInflight && activityInflight.id === id && Date.now() - activityInflight.at < 3000) return activityInflight.p
+  const p = readActivityUncached(connection, id)
+  activityInflight = { at: Date.now(), id, p }
+  p.catch(() => { activityInflight = null })
+  return p
+}
+
+async function readActivityUncached(connection: Connection, id: bigint) {
+  const campaign = campaignPda(id)
+  const sigs: { signature: string; err: unknown }[] = []
+  let before: string | undefined
+  for (;;) {
+    const page = await withRetry(() => connection.getSignaturesForAddress(campaign, { before, limit: 1000 }, 'confirmed'))
+    sigs.push(...page)
+    if (page.length < 1000) break
+    before = page[page.length - 1].signature
+  }
+  const todo = sigs.filter((s) => !s.err && !activityCache.has(s.signature)).map((s) => s.signature)
+  // One request per tx (free RPC plans reject JSON-RPC batches), 3 at a time, retry on rate limits.
+  let next = 0
+  const worker = async () => {
+    while (next < todo.length) {
+      const sig = todo[next++]
+      const tx = await withRetry(() =>
+        connection.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }),
+      )
+      if (tx) activityCache.set(sig, decodeActivity(tx, sig))
+    }
+  }
+  await Promise.all([worker(), worker(), worker()])
+  const all = sigs.map((s) => activityCache.get(s.signature)).filter((a): a is Activity => !!a)
+  return {
+    registrations: all.flatMap((a) => (a.registration ? [a.registration] : [])).sort((a, b) => a.index - b.index),
+    claims: all.flatMap((a) => (a.claim ? [a.claim] : [])), // signatures come newest first
+  }
 }
 
 /** True if this nullifier already claimed (its marker account exists on-chain). */
@@ -242,13 +346,15 @@ export async function isEligible(_connection: Connection, _id: bigint, _wallet: 
 }
 
 /** All registrations, ordered by leaf index */
-export async function getRegistrations(_connection: Connection, _id: bigint): Promise<Registration[]> {
+export async function getRegistrations(connection: Connection, id: bigint): Promise<Registration[]> {
+  if (LIVE.explorer) return (await readActivity(connection, id)).registrations
   await sleep(300)
   return load().registrations
 }
 
 /** All claims, newest first */
-export async function getClaims(_connection: Connection, _id: bigint): Promise<ClaimRecord[]> {
+export async function getClaims(connection: Connection, id: bigint): Promise<ClaimRecord[]> {
+  if (LIVE.explorer) return (await readActivity(connection, id)).claims
   await sleep(300)
   return [...load().claims].reverse()
 }
