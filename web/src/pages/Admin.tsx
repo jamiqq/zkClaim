@@ -121,7 +121,7 @@ export default function Admin() {
       {connected && isAdmin && (
         <ol className="steps">
           <li className="card">
-            <h2>1. Create campaign</h2>
+            <h2>Create campaign</h2>
             <p>Creates the campaign, an empty Merkle tree and a vault owned by the program.</p>
             <input type="text" className="wide mono" placeholder="Token mint address" value={mintText} onChange={(e) => setMintText(e.target.value)} />
             <input type="text" className="mono" placeholder="Amount per claim (base units)" value={amountText} onChange={(e) => setAmountText(e.target.value)} />
@@ -136,7 +136,7 @@ export default function Admin() {
           </li>
 
           <li className="card">
-            <h2>2. Add eligible wallets</h2>
+            <h2>Add eligible wallets</h2>
             <p>One address per line. Sent in batches of {api.ELIGIBLE_BATCH} per transaction. Publish this list and where it came from, so anyone can audit it.</p>
             <textarea rows={6} className="wide mono" placeholder={'Wallet1…\nWallet2…'} value={walletsText} onChange={(e) => setWalletsText(e.target.value)} disabled={!registering} />
             <button disabled={!registering || parsed.valid.length === 0 || parsed.invalid.length > 0 || !!busy} onClick={addWallets}>
@@ -146,7 +146,7 @@ export default function Admin() {
           </li>
 
           <li className="card">
-            <h2>3. Fund the vault</h2>
+            <h2>Fund the vault</h2>
             <p>Transfers tokens from your wallet into the vault. Claims pay out from here.</p>
             <input type="text" className="mono" placeholder="Amount (base units)" value={fundText} onChange={(e) => setFundText(e.target.value)} />
             {campaign && (
@@ -163,7 +163,7 @@ export default function Admin() {
           </li>
 
           <li className="card">
-            <h2>4. Freeze</h2>
+            <h2>Freeze</h2>
             <p>Locks the root the program computed. Registration closes and claims open. This cannot be undone.</p>
             <label>
               <input type="checkbox" checked={confirmFreeze} onChange={(e) => setConfirmFreeze(e.target.checked)} disabled={!registering} />

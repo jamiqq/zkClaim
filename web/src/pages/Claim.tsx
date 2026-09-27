@@ -192,7 +192,7 @@ export default function Claim() {
       {frozen && (
         <ol className="steps">
           <li className="card">
-            <h2>1. Load your backup</h2>
+            <h2>Load your backup</h2>
             <p>The .zkclaim file you saved when you registered. It stays in this browser.</p>
             <input type="file" accept=".zkclaim,application/json" onChange={onFile} disabled={busy} />
             {localBackups.length > 0 && !backup && (
@@ -216,7 +216,7 @@ export default function Claim() {
           </li>
 
           <li className="card">
-            <h2>2. Recipient wallet (B)</h2>
+            <h2>Recipient wallet (B)</h2>
             <p>Use a fresh address that has never touched your eligible wallet. It needs no SOL: the relayer pays.</p>
             <input
               type="text"
@@ -234,7 +234,7 @@ export default function Claim() {
           </li>
 
           <li className="card">
-            <h2>3. Generate the proof</h2>
+            <h2>Generate the proof</h2>
             <p>Runs on this device. Your secret is never sent anywhere.</p>
             <p className="muted small">Tip: don’t claim right after the freeze. A random delay makes timing harder to link.</p>
             <button onClick={doProve} disabled={!backup || !recipient || busy}>
@@ -249,7 +249,7 @@ export default function Claim() {
           </li>
 
           <li className="card">
-            <h2>4. Send to the relayer</h2>
+            <h2>Send to the relayer</h2>
             <p>The relayer pays the fee and creates B’s token account. It only sees the proof, nullifier and B.</p>
             <button onClick={doSend} disabled={!proved || busy || !!sig}>
               {stage === 'sending' && !sig ? 'Sending…' : 'Claim'}

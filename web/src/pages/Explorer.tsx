@@ -62,7 +62,7 @@ export default function Explorer() {
       </div>
 
       <div className="card trace">
-        {!picked && <p>🔍 <b>Trace it:</b> click a claim on the right, then guess which registration made it.</p>}
+        {!picked && <p><b>Trace it.</b> click a claim on the right, then guess which registration made it.</p>}
         {picked && !guess && (
           <p>
             Claim to <span className="mono">{short(picked.recipient, 6)}</span> selected. Now pick the registration you think made it.{' '}

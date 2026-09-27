@@ -72,7 +72,7 @@ export default function Register() {
     body = (
       <ol className="steps">
         <li className="card">
-          <h2>1. Generate your secret</h2>
+          <h2>Generate your secret</h2>
           <p>It is created on this device and never sent anywhere. Only its hash goes on-chain.</p>
           <button onClick={generate} disabled={busy}>{backup ? 'Generate a new one' : 'Generate secret'}</button>
           {backup && (
@@ -80,7 +80,7 @@ export default function Register() {
           )}
         </li>
         <li className="card">
-          <h2>2. Save the backup</h2>
+          <h2>Save the backup</h2>
           <p className="warn">If you lose this file you cannot claim. Nobody can recover it.</p>
           <button onClick={() => backup && downloadBackup(backup)} disabled={!backup}>Download .zkclaim file</button>
           <label>
@@ -89,7 +89,7 @@ export default function Register() {
           </label>
         </li>
         <li className="card">
-          <h2>3. Register</h2>
+          <h2>Register</h2>
           <p>Sign with wallet A. This shows A is eligible, but not which future claim is yours.</p>
           <button onClick={doRegister} disabled={!backup || !saved || busy}>{busy ? 'Registering…' : 'Register'}</button>
         </li>
