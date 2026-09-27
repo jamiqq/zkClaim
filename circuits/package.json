@@ -1,9 +1,17 @@
 {
-  "name": "circuits",
-  "version": "1.0.0",
-  "main": "index.js",
-  "license": "MIT",
+  "name": "zkclaim-circuits",
+  "private": true,
+  "scripts": {
+    "build": "./scripts/build.sh",
+    "input": "node scripts/gen-input.js",
+    "prove": "./scripts/prove.sh",
+    "export": "node scripts/export-solana.js",
+    "vk": "node scripts/vk-to-rust.js",
+    "vectors": "node scripts/test-vectors.js"
+  },
   "dependencies": {
-    "circomlib": "^2.0.5"
+    "@solana/web3.js": "^1.98.0",
+    "circomlib": "^2.0.5",
+    "circomlibjs": "^0.1.7"
   }
 }
