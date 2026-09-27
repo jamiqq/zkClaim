@@ -14,7 +14,7 @@ default = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 anchor-debug = []
 custom-heap = []
 custom-panic = []
@@ -22,7 +22,10 @@ custom-panic = []
 
 [dependencies]
 anchor-lang = "1.1.2"
-groth16-solana = "0.2.0"
+anchor-spl = "1.1.2"
+bytemuck = { version = "1.25.2", features = ["derive", "min_const_generics"] }
+groth16-solana = "=0.2.0"
+solana-poseidon = { version = "3.1.14", features = ["agave-unstable-api"] }
 
 [dev-dependencies]
 litesvm = "0.10.0"
@@ -30,6 +33,9 @@ solana-message = "3.0.1"
 solana-transaction = "3.0.2"
 solana-signer = "3.0.0"
 solana-keypair = "3.0.1"
+solana-account = "3.4.0"
+solana-program-pack = "3.1.0"
+solana-program-option = "3.1.0"
 
 
 [lints.rust]
