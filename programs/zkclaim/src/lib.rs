@@ -33,4 +33,8 @@ pub mod zkclaim {
     ) -> Result<()> {
         crate::instructions::add_eligible::handle_add_eligible(ctx, wallets)
     }
+
+    pub fn register(ctx: Context<Register>, commitment: [u8; 32]) -> Result<()> {
+        crate::instructions::register::handle_register(ctx, commitment)
+    }
 }

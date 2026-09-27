@@ -26,4 +26,6 @@ pub enum ErrorCode {
     InvalidEligibleAccount,
     #[msg("Wallet is already eligible for this campaign")]
     AlreadyEligible,
+    #[msg("Poseidon hash syscall failed")]
+    PoseidonFailed,
 }

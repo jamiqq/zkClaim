@@ -45,3 +45,16 @@ impl Tree {
 #[account]
 #[derive(InitSpace)]
 pub struct Eligible {}
+
+/// Permanent marker at ["registration", campaign, wallet]: survives the `Eligible` close,
+/// so a wallet can never register twice even if the admin re-adds it.
+#[account]
+#[derive(InitSpace)]
+pub struct Registration {}
+
+#[event]
+pub struct Registered {
+    pub index: u32,
+    pub commitment: [u8; 32],
+    pub root: [u8; 32],
+}

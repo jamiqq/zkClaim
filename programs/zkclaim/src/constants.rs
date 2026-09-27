@@ -19,6 +19,9 @@ pub const TREE_SEED: &[u8] = b"tree";
 pub const ELIGIBLE_SEED: &[u8] = b"eligible";
 
 #[constant]
+pub const REGISTRATION_SEED: &[u8] = b"registration";
+
+#[constant]
 pub const NULLIFIER_SEED: &[u8] = b"nullifier";
 
 pub const TREE_DEPTH: usize = 8;
@@ -37,4 +40,10 @@ pub const ZEROS: [[u8; 32]; TREE_DEPTH + 1] = [
     [45, 238, 147, 197, 166, 102, 69, 150, 70, 234, 125, 34, 204, 169, 225, 188, 254, 215, 30, 105, 81, 185, 83, 97, 29, 17, 221, 163, 46, 160, 157, 120],
     [7, 130, 149, 229, 162, 43, 132, 233, 130, 207, 96, 30, 182, 57, 89, 123, 139, 5, 21, 168, 140, 181, 172, 127, 168, 164, 170, 190, 60, 135, 52, 157],
     [47, 165, 229, 241, 143, 96, 39, 166, 80, 27, 236, 134, 69, 100, 71, 42, 97, 107, 46, 39, 74, 65, 33, 26, 68, 76, 190, 58, 153, 243, 204, 97],
+];
+
+/// BN254 scalar field modulus, 32-byte big-endian. Field elements must be strictly below it.
+pub const FIELD_MODULUS_BE: [u8; 32] = [
+    48, 100, 78, 114, 225, 49, 160, 41, 184, 80, 69, 182, 129, 129, 88, 93, 40, 51, 232, 72, 121,
+    185, 112, 145, 67, 225, 245, 147, 240, 0, 0, 1,
 ];
