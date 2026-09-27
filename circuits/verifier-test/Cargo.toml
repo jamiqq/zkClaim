@@ -1,0 +1,19 @@
+[package]
+name = "zkclaim-verifier-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# standalone: not part of the Anchor workspace at the repo root
+[workspace]
+
+# Off-chain check that snarkjs proofs verify with groth16-solana
+# (same crate version the Anchor program uses).
+
+[dependencies]
+groth16-solana = "=0.2.0"
+
+[dev-dependencies]
+hex = "0.4"
+serde_json = "1"
+solana-poseidon = "2"
