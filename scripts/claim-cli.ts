@@ -8,6 +8,8 @@
 //       Writes the proof to .last-claim.json for the attack tests below.
 //   npx tsx claim-cli.ts replay <campaignId>
 //       re-sends the last proof + nullifier to the same recipient -> MUST FAIL (nullifier used)
+//   npx tsx claim-cli.ts prove-only <campaignId> <unusedEntryIndex>
+//       proof + nullifier for a fresh recipient, NOT sent -> relayer-test-proof-<i>.json (shareable)
 //   npx tsx claim-cli.ts swap-fresh <campaignId> <unusedEntryIndex>
 //       proof for recipient X submitted for recipient Y with an UNUSED nullifier
 //       -> MUST FAIL on the proof; the entry stays claimable afterwards
@@ -91,7 +93,7 @@ async function sendClaim(program: any, relayer: Keypair, campaign: PublicKey, mi
 
 async function main() {
   const [cmd, idArg, entryArg, recipientArg] = process.argv.slice(2);
-  if (!cmd || !idArg) throw new Error("usage: claim-cli.ts freeze|claim|replay|swap-fresh <campaignId> [entryIndex] [recipient]");
+  if (!cmd || !idArg) throw new Error("usage: claim-cli.ts freeze|claim|replay|swap-fresh|prove-only <campaignId> [entryIndex] [recipient]");
   const campaignId = BigInt(idArg);
   const campaign = pda([Buffer.from("campaign"), u64le(campaignId)]);
   const { relayer, connection, program } = setup();
@@ -128,6 +130,23 @@ async function main() {
     console.log(`proof generated in ${Date.now() - t} ms (leaf ${index} of ${leaves.length})`);
     return { proofBytes: Buffer.from(proofToSolana(proof)), nullBytes: be32(nullifier) };
   };
+
+  if (cmd === "prove-only") {
+    // proof for an unused entry + fresh recipient, NOT sent. Output is safe to share (no secret inside):
+    // lets the relayer be tested without the secrets or the circuit build.
+    const kp = Keypair.generate();
+    fs.mkdirSync(RECIPIENTS, { recursive: true });
+    fs.writeFileSync(path.join(RECIPIENTS, `${kp.publicKey.toBase58()}.json`), JSON.stringify(Array.from(kp.secretKey)));
+    const { proofBytes, nullBytes } = await proveFor(entryArg, kp.publicKey);
+    const nullAcc = pda([Buffer.from("nullifier"), campaign.toBuffer(), nullBytes]);
+    if (await connection.getAccountInfo(nullAcc)) throw new Error(`entry ${entryArg} already claimed - pick an unused entry`);
+    const out = { campaign: campaign.toBase58(), campaignId: idArg, recipient: kp.publicKey.toBase58(),
+      proof: proofBytes.toString("hex"), nullifier: nullBytes.toString("hex") };
+    const f = path.join(HERE, `relayer-test-proof-${entryArg}.json`);
+    fs.writeFileSync(f, JSON.stringify(out, null, 2));
+    console.log("wrote", f, "(no secret inside; safe to send to the relayer dev)");
+    return;
+  }
 
   if (cmd === "swap-fresh") {
     // proof made for recipient X, submitted for recipient Y, with an UNUSED nullifier.
