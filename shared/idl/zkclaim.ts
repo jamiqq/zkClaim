@@ -411,91 +411,6 @@ export type Zkclaim = {
       "args": []
     },
     {
-      "name": "increment",
-      "discriminator": [
-        11,
-        18,
-        104,
-        9,
-        104,
-        174,
-        59,
-        33
-      ],
-      "accounts": [
-        {
-          "name": "counter",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  117,
-                  110,
-                  116,
-                  101,
-                  114
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "authority",
-          "signer": true
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "initialize",
-      "discriminator": [
-        175,
-        175,
-        109,
-        31,
-        13,
-        152,
-        155,
-        237
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "counter",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  117,
-                  110,
-                  116,
-                  101,
-                  114
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "register",
       "discriminator": [
         211,
@@ -646,19 +561,6 @@ export type Zkclaim = {
       ]
     },
     {
-      "name": "counter",
-      "discriminator": [
-        255,
-        176,
-        4,
-        245,
-        188,
-        253,
-        124,
-        25
-      ]
-    },
-    {
       "name": "eligible",
       "discriminator": [
         97,
@@ -760,66 +662,61 @@ export type Zkclaim = {
     },
     {
       "code": 6001,
-      "name": "counterOverflow",
-      "msg": "Counter has reached the maximum value"
-    },
-    {
-      "code": 6002,
       "name": "notRegistering",
       "msg": "Campaign is not in the Registering state"
     },
     {
-      "code": 6003,
+      "code": 6002,
       "name": "notFrozen",
       "msg": "Campaign is not in the Frozen state"
     },
     {
-      "code": 6004,
+      "code": 6003,
       "name": "treeFull",
       "msg": "Merkle tree is full"
     },
     {
-      "code": 6005,
+      "code": 6004,
       "name": "invalidCommitment",
       "msg": "Commitment must be non-zero and below the BN254 modulus"
     },
     {
-      "code": 6006,
+      "code": 6005,
       "name": "invalidNullifier",
       "msg": "Nullifier must be below the BN254 modulus"
     },
     {
-      "code": 6007,
+      "code": 6006,
       "name": "proofInvalid",
       "msg": "Groth16 proof verification failed"
     },
     {
-      "code": 6008,
+      "code": 6007,
       "name": "invalidAmount",
       "msg": "Claim amount must be greater than zero"
     },
     {
-      "code": 6009,
+      "code": 6008,
       "name": "eligibleCountMismatch",
       "msg": "Wallet list must be non-empty and match the remaining accounts one-to-one"
     },
     {
-      "code": 6010,
+      "code": 6009,
       "name": "invalidEligibleAccount",
       "msg": "Remaining account is not the Eligible PDA for this campaign and wallet"
     },
     {
-      "code": 6011,
+      "code": 6010,
       "name": "alreadyEligible",
       "msg": "Wallet is already eligible for this campaign"
     },
     {
-      "code": 6012,
+      "code": 6011,
       "name": "poseidonFailed",
       "msg": "Poseidon hash syscall failed"
     },
     {
-      "code": 6013,
+      "code": 6012,
       "name": "noRegistrations",
       "msg": "Cannot freeze a campaign with no registrations"
     }
@@ -936,22 +833,6 @@ export type Zkclaim = {
                 32
               ]
             }
-          }
-        ]
-      }
-    },
-    {
-      "name": "counter",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "count",
-            "type": "u64"
-          },
-          {
-            "name": "authority",
-            "type": "pubkey"
           }
         ]
       }
@@ -1081,24 +962,9 @@ export type Zkclaim = {
       "value": "[99, 97, 109, 112, 97, 105, 103, 110]"
     },
     {
-      "name": "counterSeed",
-      "type": "bytes",
-      "value": "[99, 111, 117, 110, 116, 101, 114]"
-    },
-    {
       "name": "eligibleSeed",
       "type": "bytes",
       "value": "[101, 108, 105, 103, 105, 98, 108, 101]"
-    },
-    {
-      "name": "helloWorldLamports",
-      "type": "u64",
-      "value": "1"
-    },
-    {
-      "name": "maxCount",
-      "type": "u64",
-      "value": "10"
     },
     {
       "name": "nullifierSeed",

@@ -4,8 +4,6 @@ use anchor_lang::prelude::*;
 pub enum ErrorCode {
     #[msg("Signer is not authorized for this action")]
     Unauthorized,
-    #[msg("Counter has reached the maximum value")]
-    CounterOverflow,
     #[msg("Campaign is not in the Registering state")]
     NotRegistering,
     #[msg("Campaign is not in the Frozen state")]
