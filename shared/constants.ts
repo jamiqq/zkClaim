@@ -30,6 +30,7 @@ export const PUBLIC_INPUTS = [
 export const SEED_CAMPAIGN = "campaign"; // ["campaign", campaign_id as u64 LE]
 export const SEED_TREE = "tree"; // ["tree", campaign]
 export const SEED_ELIGIBLE = "eligible"; // ["eligible", campaign, wallet]
+export const SEED_REGISTRATION = "registration"; // ["registration", campaign, wallet]
 export const SEED_NULLIFIER = "nullifier"; // ["nullifier", campaign, nullifier 32 bytes BE]
 
 // Proof on-chain: 256 bytes = proof_a (64, NEGATED) || proof_b (128) || proof_c (64), big-endian
