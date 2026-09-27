@@ -2,7 +2,7 @@
 
 Private claims for any eligibility list, on Solana.
 
-Status: hackathon spec, v1.2 (2026-09-26). Stack: circom + snarkjs + `groth16-solana` (Light Protocol verifier) + Anchor. Target: live devnet demo, judging evening of 2026-09-27.
+Status: hackathon spec, v1.3 (2026-09-27), matches the deployed program. Stack: circom + snarkjs + `groth16-solana` (Light Protocol verifier) + Anchor. Target: live devnet demo, judging evening of 2026-09-27.
 
 ---
 
@@ -10,21 +10,24 @@ Status: hackathon spec, v1.2 (2026-09-26). Stack: circom + snarkjs + `groth16-so
 
 zkClaim lets people on an eligibility list claim a fixed amount of tokens to a fresh wallet that nobody can link back to the wallet that qualified. The claim is a zero-knowledge proof of "I registered from an eligible wallet and have not claimed yet" that does not reveal which registration is the claimer's.
 
-**Pitch.** Private claims for any eligibility list. Not a mixer: fixed amounts, a known list, one claim per person, a capped total, and optional blocklist checks.
+**Pitch.** A privacy layer for paying a known group of people on Solana. The issuer knows who should be paid; the payment can't be traced to any one of them. Not a mixer: fixed amounts, a known list, one claim per person, a capped total.
 
 **One-liner for judges.** The a16z / 0xPARC private-airdrop design, cheap enough to verify on Solana, with the StealthDrop double-claim bug fixed.
 
-**Problem.** Claims on Solana are public. The receiving wallet reveals which eligible person claimed and usually ties back to their trading history, holdings or real identity. Recipients who need privacy either skip the claim or expose themselves.
+**Problem.** Payouts on Solana are public. The receiving wallet reveals who got paid and usually ties back to their trading history, holdings or real identity. Recipients who need privacy either skip the payout or expose themselves.
 
-**Target users.** Issuers rewarding wallets that are *already public*, where the risk is linking the reward back to them:
-- Retroactive rewards to on-chain contributors. **This is the lead use case for the demo.**
-- Equal-size grants to a cohort, such as hackathon participants or a DAO's contributor list.
-- Later (roadmap): bug-bounty payouts, in a variant where the issuer distributes commitments off-chain so the researcher's wallet never appears on-chain.
-- Airdrop issuers are a weaker fit: they often *want* linkable claims for sybil analysis.
+**What the primitive does.** Pay (or hand out a token to) everyone on a known list: once each, in a fixed amount, to a wallet nobody can link back to them. The list and the registrations are public; the payout is not.
 
-**Hook.** Rewarded tokens can be sold or used to vote without being traced back to the contributor's main wallet.
+**Use cases (all run on the current program):**
 
-**Why not bug bounties or whistleblowers first.** Registering puts the eligible wallet on a public allowlist, which is worse than today's practice of privately handing the issuer a fresh address. Bounty payouts are tiered by severity (anonymity sets of 1–3), and most bounty programs require KYC anyway. Whistleblowers aren't on a pre-drawn list, and being on one is itself the sensitive fact.
+| Category | Examples | Why privacy matters |
+|---|---|---|
+| Rewards and grants (lead) | Retro rewards to contributors, equal grants to a cohort, hackathon participant rewards | Rewards can be sold or used without being traced to the contributor's main wallet |
+| Aid and compensation | Stablecoin humanitarian aid to verified recipients; compensation to exploit victims; payments to research participants | Recipients' spending wallets stay unlinked from identities that are known or already public |
+| Anonymous credentials | 1 governance token per member for anonymous DAO voting; access passes for private chats or events; one "voice" token per member for honest surveys | Holding the token proves membership without saying which member |
+| Recurring stipends | Equal monthly stipends to contributors, one campaign per period | Income stays unlinked from the main wallet over time |
+
+**Who it doesn't fit.** Cases where being on the list is itself the sensitive fact (whistleblowers, some medical studies), or payouts of different sizes per person (each size needs its own campaign, which shrinks the anonymity set). Bug bounties: payouts are tiered and bounty programs usually require KYC anyway; a variant with off-chain commitments is on the roadmap.
 
 ---
 
@@ -32,18 +35,18 @@ zkClaim lets people on an eligibility list claim a fixed amount of tokens to a f
 
 1. **Create campaign.** The admin creates a campaign with a fixed claim amount, a token mint and a program-owned vault, then funds the vault.
 2. **Allowlist.** The admin creates one `eligible` account per eligible wallet (batched, about 10 per transaction).
-3. **Register.** Eligible wallet A generates a random `secret` on the device and computes `commitment = Poseidon(secret)`. A calls `register(commitment)`. The program:
+3. **Register.** Eligible wallet A generates a random `secret` on the device and computes `commitment = Poseidon(secret)`. A calls `register(commitment)`, signed by A (`user`, needs no SOL) and a `payer` (A itself in the web app, or a sponsor). The program:
    - checks A signed the transaction,
-   - consumes A's `eligible` account (closes it), so each wallet registers once,
+   - closes A's `Eligible` account (rent goes to the payer) and creates a permanent `Registration` marker, so each wallet registers once even if the admin allowlists it again,
    - **inserts the commitment into the on-chain Merkle tree itself** (Poseidon syscall). The root is computed by the program, never supplied by the admin.
-4. **Freeze.** The admin calls `freeze`. The program locks the root it computed. Registration closes and claims open. No commitment can be added after this point.
+4. **Freeze.** The admin calls `freeze_campaign`. The program locks the root it computed. Registration closes and claims open. No commitment can be added after this point.
 5. **Wait.** Users should not claim immediately after the freeze (see section 7).
 6. **Claim.** On their own device, the user builds a proof for recipient wallet B. The relayer submits `claim(proof, nullifier)` and pays the fee. The program:
    - builds the public inputs **itself** from on-chain state (frozen root, `campaign_id`, B's address) plus the submitted nullifier,
    - verifies the Groth16 proof,
    - creates the `nullifier` account (this fails if it already exists, so a double claim fails),
    - transfers the fixed amount from the vault to B's token account.
-7. **Relay.** The relayer is the fee payer and creates B's associated token account (paying the rent), so B never needs SOL from A.
+7. **Relay.** The relayer is the fee payer, creates B's associated token account and pays the nullifier record's rent, so B never needs SOL from A. Anyone can submit a claim; the relayer has no special rights in the program.
 
 A second claim with the same secret produces the same nullifier, and the transaction fails.
 
@@ -61,8 +64,8 @@ A second claim with the same secret produces the same nullifier, and the transac
 | `recipient_lo` | public | Last 16 bytes of B's address, as a big-endian integer |
 | `campaign_id` | public | Campaign's u64 id |
 | `secret` | private | Random field element generated on the device |
-| `path_elements[8]` | private | Merkle siblings |
-| `path_indices[8]` | private | Left/right bits (0/1) |
+| `pathElements[8]` | private | Merkle siblings |
+| `pathIndices[8]` | private | Left/right bits (0/1) |
 
 **Why the recipient is split:** a Solana address is 256 bits and a BN254 field element holds only about 254 bits. A single field element would either be rejected or silently reduced mod p.
 
@@ -70,10 +73,10 @@ A second claim with the same secret produces the same nullifier, and the transac
 
 ```
 leaf        = Poseidon(secret)
-computed    = MerkleRoot(leaf, path_elements, path_indices)   // depth 8, Poseidon(left, right)
+computed    = MerkleRoot(leaf, pathElements, pathIndices)   // depth 8, Poseidon(left, right)
 assert computed == root
 assert nullifier == Poseidon(secret, campaign_id)
-assert path_indices[i] * (1 - path_indices[i]) == 0           // each bit is boolean
+assert pathIndices[i] * (1 - pathIndices[i]) == 0           // each bit is boolean
 assert recipient_hi < 2^128 ; assert recipient_lo < 2^128     // range checks
 // Binding: keeps the optimizer from dropping unused public inputs (Tornado Cash pattern)
 recipient_sq = (recipient_hi + recipient_lo) * (recipient_hi + recipient_lo)
@@ -82,7 +85,7 @@ recipient_sq = (recipient_hi + recipient_lo) * (recipient_hi + recipient_lo)
 - Tree depth: **8** (up to 256 registrations).
 - Empty leaves use a precomputed zero chain: `zero[0] = 0`, `zero[i+1] = Poseidon(zero[i], zero[i])`. It must be identical in the circuit, the program and the TypeScript code.
 - Hash: **Poseidon over BN254, circomlib parameters (x^5 S-box)**, via circomlib's `Poseidon(1)` and `Poseidon(2)` templates.
-- Path convention: `path_indices[i] = 0` means the current node is the left child; bits are taken LSB-first from the leaf index.
+- Path convention: `pathIndices[i] = 0` means the current node is the left child; bits are taken LSB-first from the leaf index.
 - Public signals are declared in the template in the order of the table above, because snarkjs orders public inputs by declaration.
 - Implementation: `circuits/zkclaim.circom` (circom 2.2), built by `circuits/scripts/build.sh`.
 
@@ -108,6 +111,7 @@ The same Poseidon has to produce identical outputs in three places: the circom c
 | `Campaign` | `["campaign", campaign_id]` | `admin`, `campaign_id: u64`, `mint`, `vault`, `amount: u64`, `state: {Registering, Frozen}`, `root: [u8;32]`, `bump` |
 | `Tree` (zero-copy) | `["tree", campaign]` | `next_index: u32`, `filled_subtrees: [[u8;32];8]`, `current_root: [u8;32]`, `leaves: [[u8;32];256]` |
 | `Eligible` | `["eligible", campaign, wallet]` | empty marker (closed on registration) |
+| `Registration` | `["registration", campaign, wallet]` | permanent marker: this wallet registered |
 | `Nullifier` | `["nullifier", campaign, nullifier_bytes]` | empty marker |
 | Vault | associated token account owned by the `Campaign` account | token balance |
 
@@ -120,17 +124,19 @@ Notes:
 **`create_campaign(campaign_id, amount)`** — admin signs
 - Initializes the `Campaign` and the `Tree` (the root of the empty tree is `zero[8]`) and creates the vault account.
 
-**`add_eligible(wallets: Vec<Pubkey>)`** — admin signs; requires `state == Registering`
+**`add_eligible(wallets: Vec<Pubkey>)`** — admin signs (`has_one = admin`); requires `state == Registering`
 - Creates one `Eligible` account per wallet; the addresses are passed in as remaining accounts.
 
-**`register(commitment: [u8;32])`** — wallet A signs; requires `state == Registering`
-- Closes `Eligible[campaign, A]` and refunds the rent to the admin. If the account is missing, A is either not eligible or already registered.
+**`register(commitment: [u8;32])`** — `user` (wallet A) and `payer` sign; requires `state == Registering`
+- `user` needs no SOL; `payer` pays rent for `Registration` and receives `Eligible`'s rent. Web users pass themselves as both; seed scripts pass a sponsor.
+- Closes `Eligible[campaign, A]`. If the account is missing, A is either not eligible or already registered.
+- Creates `Registration[campaign, A]` with `init`, so a second registration fails even if the admin re-adds A.
 - Requires `commitment < BN254 modulus` and `commitment != 0`.
 - Requires `next_index < 256`.
 - Does an incremental Merkle insert (Tornado-style `filled_subtrees`): 8 Poseidon syscalls, which should cost only a few thousand compute units (CU; to be measured).
 - Stores the leaf, updates `current_root`, increments `next_index`, and emits `Registered { index, commitment }`.
 
-**`freeze()`** — admin signs; requires `state == Registering`
+**`freeze_campaign()`** — admin signs (`has_one = admin`); requires `state == Registering`
 - Sets `campaign.root = tree.current_root` and `state = Frozen`.
 - The admin cannot pass in a root, so there is no way to fake one.
 
@@ -153,9 +159,11 @@ The client supplies only the nullifier and the proof. The root, recipient and ca
 - Proof layout (256 bytes, big-endian): `proof_a` (64, **negated**) ‖ `proof_b` (128) ‖ `proof_c` (64). snarkjs outputs a different encoding; the client converts it before sending. A proof that passes `snarkjs groth16 verify` but fails on-chain almost always means the negation or byte order is wrong.
 - Why not Noir: Noir's default UltraHonk backend has no Solana verifier, and the Noir → Groth16 path (Sunspot) is unaudited and proves outside the browser. circom + `groth16-solana` gives in-browser proving and an audited verifier.
 
-**Compute budget:** request 400k CU on `claim` with `SetComputeUnitLimit`. `groth16-solana` verification costs roughly 200k CU for a circuit with five public inputs.
+**Compute budget:** request 400k CU on `claim` with `SetComputeUnitLimit`. Measured: the whole claim uses ~149k CU (LiteSVM).
 
-**Transaction size:** 256-byte proof + 32-byte nullifier + about 10 accounts + compute-budget instruction ≈ 700–800 bytes, under the 1,232-byte limit. **Measure it early.**
+**Cost per claim:** the transaction fee is a fraction of a cent; the real cost is rent, about 0.003 SOL per claim (recipient token account ~0.002 SOL, nullifier record ~0.001 SOL, never closed). The relayer fronts both.
+
+**Transaction size:** measured 814 bytes (compute budget + idempotent ATA + claim), under the 1,232-byte limit.
 
 ### 4.4 Errors
 
@@ -167,7 +175,7 @@ The client supplies only the nullifier and the proof. The root, recipient and ca
 
 ### 5.1 Tree / witness builder (TypeScript)
 - Reads the `Tree` account, rebuilds the full tree from `leaves[0..next_index]`, and checks the result against the on-chain `current_root` / `campaign.root`.
-- Given the user's commitment, returns its `index`, `path_elements` and `path_indices`.
+- Given the user's commitment, returns its `index`, `pathElements` and `pathIndices`.
 
 ### 5.2 Prover (in the browser)
 - `snarkjs.groth16.fullProve(input, "/zk/zkclaim.wasm", "/zk/zkclaim_final.zkey")` runs in the user's browser. **The secret never leaves the device.**
@@ -197,7 +205,7 @@ The client supplies only the nullifier and the proof. The root, recipient and ca
 | # | Attack | Defence |
 |---|---|---|
 | 1 | Front-running: the relayer or an observer copies a proof and swaps in their own recipient | The recipient is a public input, constrained in the circuit, and the **program derives it from B's account**, so a changed recipient makes the proof fail |
-| 2 | Vault drain via fake registrations | Registration requires A's signature and consumes A's `Eligible` account, so each allowlisted wallet registers once |
+| 2 | Vault drain via fake registrations | Registration requires A's signature, consumes A's `Eligible` account and creates a permanent `Registration` marker, so each allowlisted wallet registers once; only the admin can allowlist (`has_one = admin`) |
 | 3 | Admin diluting the anonymity set with sock-puppet registrations | The admin cannot insert commitments directly: **the root is computed on-chain** by `register`, and `freeze` locks the program's own root. The admin *can* allowlist wallets it controls; this mostly returns its own funds, but it shrinks the true anonymity set. Mitigation: publish the allowlist and its source (e.g. contributor list) so anyone can audit it |
 | 4 | Double claim | Per-campaign `Nullifier` account, created with `init` (fails if it exists) |
 | 5 | Cross-campaign replay | `campaign_id` is a public input, part of the nullifier hash, and part of the `Nullifier` account address |
@@ -206,6 +214,8 @@ The client supplies only the nullifier and the proof. The root, recipient and ca
 | 8 | Signature-based nullifier forgery (the StealthDrop bug) | Nullifiers come from a secret commitment, not from signatures. ECDSA and Ed25519 signatures aren't unique per key/message pair |
 
 **Trust assumptions that remain (state them):**
+- Two parties have power, and neither can see who claimed: the issuer decides who is on the list, and whoever ran the trusted setup could forge proofs.
+- The relayer can refuse to submit (then submit yourself or use another relayer) but cannot steal or redirect: the recipient is a public input of the proof. It does see the requester's IP and the fresh wallet, not which registration is theirs.
 - The admin chooses the allowlist and holds the vault until it is funded. An admin that allowlists its own wallets weakens privacy for everyone else (row 3).
 - The Groth16 trusted setup (Powers of Tau and phase 2) was done by one party; whoever ran it could forge proofs. Production needs a multi-party ceremony.
 - The program and circuit are unaudited hackathon code. The verifier library (`groth16-solana`) is audited.
