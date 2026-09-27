@@ -44,3 +44,14 @@ button.link { background: none; color: #9d7cff; padding: 0; margin-right: 10px; 
 .attacks { list-style: none; padding: 0; margin: 12px 0 0; }
 .attacks li { font-family: ui-monospace, Menlo, monospace; font-size: 13px; padding: 4px 0; }
 .rejected { color: #4ade80; }
+
+textarea {
+  background: #0f1115; color: #e6e6e6; border: 1px solid #2c3039; border-radius: 6px;
+  padding: 8px 10px; font: inherit; resize: vertical;
+}
+textarea.wide { width: 100%; box-sizing: border-box; margin-bottom: 8px; font-size: 13px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 24px; }
+.stats div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stats .full { grid-column: 1 / -1; }
+.stats .mono { overflow-wrap: anywhere; }
+.stats .muted { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
