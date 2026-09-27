@@ -79,7 +79,7 @@ export default function Admin() {
   const batches = Math.ceil(parsed.valid.length / api.ELIGIBLE_BATCH)
 
   const connected = !!wallet.publicKey
-  const isAdmin = !campaign || api.MOCK || campaign.admin === wallet.publicKey?.toBase58()
+  const isAdmin = !campaign || !api.LIVE.admin || campaign.admin === wallet.publicKey?.toBase58()
   const registering = campaign?.state === 'Registering'
   const claimsCovered = campaign && campaign.amount > 0n ? campaign.vaultBalance / campaign.amount : 0n
 
@@ -98,7 +98,7 @@ export default function Admin() {
   return (
     <section>
       <h1>Admin</h1>
-      {api.MOCK && <p className="note">Demo mode: mock data, nothing is sent on-chain yet.</p>}
+      {!api.LIVE.admin && <p className="note">Admin actions are still mocks: freeze via scripts/claim-cli.ts. The numbers above are live.</p>}
       {!connected && <div className="card">Connect the admin wallet.</div>}
       {connected && !isAdmin && <div className="card warn">This wallet is not the campaign admin.</div>}
 
@@ -106,9 +106,9 @@ export default function Admin() {
         <div className="card stats">
           <div><span className="muted">Campaign</span><b>#{campaign.id.toString()}</b></div>
           <div><span className="muted">State</span><b className={registering ? '' : 'rejected'}>{campaign.state}</b></div>
-          <div><span className="muted">Per claim</span><b>{campaign.amount.toString()}</b></div>
+          <div><span className="muted">Per claim</span><b>{api.fmtTokens(campaign.amount, campaign.decimals)}</b></div>
           <div><span className="muted">Registered</span><b>{campaign.registered}/{campaign.capacity}</b></div>
-          <div><span className="muted">Vault</span><b>{campaign.vaultBalance.toString()}</b></div>
+          <div><span className="muted">Vault</span><b>{api.fmtTokens(campaign.vaultBalance, campaign.decimals)}</b></div>
           <div><span className="muted">Covers</span><b>{claimsCovered.toString()} claims</b></div>
           <div className="full"><span className="muted">Mint</span><span className="mono">{campaign.mint}</span></div>
           <div className="full">
@@ -181,7 +181,7 @@ export default function Admin() {
         </ol>
       )}
 
-      {api.MOCK && (
+      {!api.LIVE.campaign && (
         <div className="card">
           <h2>Mock tools</h2>
           <p>Resets the fake campaign back to Registering. Only exists in demo mode.</p>

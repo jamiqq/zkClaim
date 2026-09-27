@@ -4,7 +4,7 @@ import { Keypair, PublicKey } from '@solana/web3.js'
 import { CAMPAIGN_ID, PROOF_BYTES, explorerTx } from '../config'
 import * as api from '../api'
 import type { CampaignInfo } from '../api'
-import { type Backup, listLocal, parseBackup } from '../lib/secret'
+import { type Backup, commitmentOf, listLocal, parseBackup, toHex32 } from '../lib/secret'
 import { buildInput, nullifierOf, prove, proverAvailable, recipientLimbs } from '../lib/zk'
 
 type Proved = { proof: Uint8Array; nullifier: bigint; recipient: PublicKey; ms: number; mock: boolean }
@@ -14,7 +14,8 @@ type AttackResult = { name: string; ok: boolean; detail: string }
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 function friendly(m: string) {
   if (/already in use|already claimed/i.test(m)) return 'Already claimed: this nullifier is already on-chain.'
-  if (/ProofInvalid/i.test(m)) return 'Proof rejected by the program (ProofInvalid).'
+  if (/ProofInvalid|proof.*(invalid|rejected)|verif/i.test(m)) return 'Proof rejected by the program (ProofInvalid).'
+  if (/custom program error/i.test(m)) return 'Rejected by the program: ' + m.slice(0, 160)
   if (/NotFrozen/i.test(m)) return 'Claims are not open yet: the campaign is not frozen.'
   return m
 }
@@ -27,6 +28,7 @@ export default function Claim() {
   const [hasProver, setHasProver] = useState<boolean | null>(null)
   const [backup, setBackup] = useState<Backup | null>(null)
   const [recipientText, setRecipientText] = useState('')
+  const [secretText, setSecretText] = useState('')
   const [stage, setStage] = useState<Stage>('idle')
   const [proved, setProved] = useState<Proved | null>(null)
   const [sig, setSig] = useState<string | null>(null)
@@ -77,6 +79,25 @@ export default function Claim() {
       await pickBackup(await parseBackup(await f.text()))
     } catch (err) {
       setError(msg(err))
+    }
+  }
+
+  async function usePastedSecret() {
+    try {
+      const secret = BigInt(secretText.trim())
+      const b: Backup = {
+        app: 'zkclaim',
+        version: 1,
+        campaignId: CAMPAIGN_ID.toString(),
+        wallet: '(pasted)',
+        secret: toHex32(secret),
+        commitment: toHex32(await commitmentOf(secret)),
+        createdAt: new Date().toISOString(),
+      }
+      setSecretText('')
+      await pickBackup(b)
+    } catch {
+      setError('Secret must be a number (decimal or 0x-hex).')
     }
   }
 
@@ -142,20 +163,20 @@ export default function Claim() {
   return (
     <section>
       <h1>Claim</h1>
-      {api.MOCK && <p className="note">Demo mode: mock data, nothing is sent on-chain yet.</p>}
+      {!api.LIVE.claim && <p className="note">Demo mode: mock data, nothing is sent on-chain yet.</p>}
       {hasProver === false && (
         <p className="note">Prover files not found in /zk/ — using a mock proof until P1 ships zkclaim.wasm + zkey.</p>
       )}
       {campaign && (
         <p className="muted">
-          Campaign #{campaign.id.toString()} · {campaign.state} · {campaign.amount.toString()} tokens per claim
+          Campaign #{campaign.id.toString()} · {campaign.state} · {api.fmtTokens(campaign.amount, campaign.decimals)} tokens per claim
         </p>
       )}
 
       {campaign && !frozen && (
         <div className="card">
           <p>Claims open after the admin freezes the tree.</p>
-          {api.MOCK && (
+          {!api.LIVE.campaign && (
             <button onClick={() => { api.mockSetState('Frozen'); reload() }}>Simulate freeze (mock)</button>
           )}
         </div>
@@ -175,6 +196,13 @@ export default function Claim() {
                     {b.commitment.slice(0, 10)}…
                   </button>
                 ))}
+              </p>
+            )}
+            {!backup && (
+              <p style={{ marginTop: 10 }}>
+                Or paste a secret:{' '}
+                <input type="password" className="mono" placeholder="secret" value={secretText} onChange={(e) => setSecretText(e.target.value)} />{' '}
+                <button className="link" onClick={usePastedSecret} disabled={!secretText.trim()}>use</button>
               </p>
             )}
             {backup && <p className="mono">commitment {backup.commitment.slice(0, 10)}…{backup.commitment.slice(-8)} ✓</p>}
@@ -227,15 +255,25 @@ export default function Claim() {
         <div className="card ok">
           <h2>Claimed</h2>
           <p>
-            {campaign?.amount.toString()} tokens sent to <span className="mono">{proved.recipient.toBase58()}</span>
+            {campaign && api.fmtTokens(campaign.amount, campaign.decimals)} tokens sent to <span className="mono">{proved.recipient.toBase58()}</span>
           </p>
           <a href={explorerTx(sig)} target="_blank" rel="noreferrer">View transaction ↗</a>
 
-          <h2 style={{ marginTop: 20 }}>Attack demo</h2>
-          <p>Both of these must be rejected.</p>
-          <button onClick={() => attack('Replay the same proof')} disabled={busy}>Replay same proof</button>
-          <button onClick={() => attack('Swap the recipient', Keypair.generate().publicKey)} disabled={busy}>
+        </div>
+      )}
+
+      {proved && (
+        <div className="card">
+          <h2>Attack demo</h2>
+          <p>
+            <b>Swap recipient</b> (before claiming): the same proof sent for another wallet must fail on the proof, and your
+            claim stays valid. <b>Replay</b> (after claiming): the same proof again must fail because the nullifier is used.
+          </p>
+          <button onClick={() => attack('Swap the recipient', Keypair.generate().publicKey)} disabled={busy || !!sig}>
             Swap recipient
+          </button>
+          <button onClick={() => attack('Replay the same proof')} disabled={busy || !sig}>
+            Replay same proof
           </button>
           <ul className="attacks">
             {attacks.map((a, i) => (

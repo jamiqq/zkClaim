@@ -29,3 +29,4 @@ dist-ssr
 .env.*
 *keypair*.json
 id.json
+!.env.example

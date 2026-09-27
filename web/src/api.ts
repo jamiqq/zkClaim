@@ -1,13 +1,94 @@
 // Contract between the UI (P4) and the TS infra (P3).
 // Everything here is a MOCK for now; P3 replaces the bodies, the signatures stay.
-import type { Connection, PublicKey } from '@solana/web3.js'
+import { type Connection, PublicKey } from '@solana/web3.js'
 import type { WalletContextState } from '@solana/wallet-adapter-react'
-import { RELAYER_URL, TREE_DEPTH } from './config'
+import { PROGRAM_ID, RELAYER_URL, SEED_CAMPAIGN, SEED_NULLIFIER, SEED_TREE, TREE_DEPTH } from './config'
 import { poseidon } from './lib/poseidon'
 import { type MerklePath, toHex, zeroChain } from './lib/zk'
 import { bigIntToBytes32, bytesToBigInt, toHex32 } from './lib/secret'
 
-export const MOCK = true
+/** What talks to devnet for real. Everything else is still a mock. */
+export const LIVE = {
+  campaign: true, // getCampaign reads Campaign + Tree + vault
+  tree: true, // getMerklePath rebuilds the on-chain tree
+  claim: true, // submitClaim -> relayer
+  register: false,
+  admin: false,
+  explorer: false,
+}
+/** @deprecated use LIVE.* */
+export const MOCK = !LIVE.claim
+
+// ---------- on-chain layout (programs/zkclaim/src/state.rs) ----------
+const programId = new PublicKey(PROGRAM_ID)
+const enc = (s: string) => new TextEncoder().encode(s)
+function u64le(n: bigint) {
+  const b = new Uint8Array(8)
+  new DataView(b.buffer).setBigUint64(0, n, true)
+  return b
+}
+export const campaignPda = (id: bigint) => PublicKey.findProgramAddressSync([enc(SEED_CAMPAIGN), u64le(id)], programId)[0]
+export const treePda = (campaign: PublicKey) => PublicKey.findProgramAddressSync([enc(SEED_TREE), campaign.toBytes()], programId)[0]
+export const nullifierPda = (campaign: PublicKey, nullifier: Uint8Array) =>
+  PublicKey.findProgramAddressSync([enc(SEED_NULLIFIER), campaign.toBytes(), nullifier], programId)[0]
+
+// Campaign (Borsh): disc 8 | admin 32 | campaign_id 8 | mint 32 | vault 32 | amount 8 | state 1 | root 32 | bump 1
+async function readCampaign(connection: Connection, id: bigint) {
+  const info = await connection.getAccountInfo(campaignPda(id), 'confirmed')
+  if (!info) throw new Error(`Campaign #${id} not found on devnet`)
+  const d = info.data
+  const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+  const pk = (o: number) => new PublicKey(d.subarray(o, o + 32))
+  return {
+    admin: pk(8),
+    mint: pk(48),
+    vault: pk(80),
+    amount: dv.getBigUint64(112, true),
+    state: (d[120] === 1 ? 'Frozen' : 'Registering') as CampaignState,
+    root: bytesToBigInt(d.subarray(121, 153)),
+  }
+}
+
+// Tree (zero-copy): disc 8 | filled_subtrees 8*32 | current_root 32 | leaves 256*32 | next_index u32 LE (last 4 bytes)
+async function readTree(connection: Connection, campaign: PublicKey) {
+  const info = await connection.getAccountInfo(treePda(campaign), 'confirmed')
+  if (!info) throw new Error('Tree account not found')
+  return parseTree(info.data)
+}
+export function parseTree(d: Uint8Array) {
+  const dv = new DataView(d.buffer, d.byteOffset, d.byteLength)
+  const next = dv.getUint32(d.length - 4, true)
+  const currentRoot = bytesToBigInt(d.subarray(8 + 256, 8 + 256 + 32))
+  const leaves: bigint[] = []
+  for (let i = 0; i < next; i++) leaves.push(bytesToBigInt(d.subarray(296 + 32 * i, 296 + 32 * (i + 1))))
+  return { currentRoot, leaves }
+}
+
+/** Merkle path for leaf `index` (spec 3.2: pathIndices[i] = 0 -> current node is the LEFT child) */
+export async function merklePath(leaves: bigint[], index: number) {
+  const zero = await zeroChain()
+  let layer = leaves.slice()
+  let idx = index
+  const pathElements: bigint[] = []
+  const pathIndices: number[] = []
+  for (let level = 0; level < TREE_DEPTH; level++) {
+    pathElements.push(layer[idx ^ 1] ?? zero[level])
+    pathIndices.push(idx & 1)
+    const next: bigint[] = []
+    for (let i = 0; i < layer.length; i += 2) next.push(await poseidon([layer[i], layer[i + 1] ?? zero[level]]))
+    layer = next
+    idx >>= 1
+  }
+  return { root: layer[0], pathElements, pathIndices }
+}
+
+/** 100000000n, 6 -> "100" */
+export function fmtTokens(x: bigint, decimals: number) {
+  if (decimals === 0) return x.toString()
+  const base = 10n ** BigInt(decimals)
+  const frac = (x % base).toString().padStart(decimals, '0').replace(/0+$/, '')
+  return (x / base).toString() + (frac ? '.' + frac : '')
+}
 
 export type CampaignState = 'Registering' | 'Frozen'
 
@@ -17,7 +98,9 @@ export type CampaignInfo = {
   state: CampaignState
   amount: bigint // per claim, token base units
   mint: string
+  vault: string
   vaultBalance: bigint // token base units
+  decimals: number // mint decimals, for display
   registered: number // tree.next_index
   capacity: number // 2^TREE_DEPTH
   root: string // 0x-hex: tree.current_root while Registering, campaign.root once Frozen
@@ -108,7 +191,27 @@ export function mockReset() {
 }
 
 // ---------- reads ----------
-export async function getCampaign(_connection: Connection, id: bigint): Promise<CampaignInfo> {
+export async function getCampaign(connection: Connection, id: bigint): Promise<CampaignInfo> {
+  if (LIVE.campaign) {
+    const c = await readCampaign(connection, id)
+    const [tree, bal] = await Promise.all([
+      readTree(connection, campaignPda(id)),
+      connection.getTokenAccountBalance(c.vault, 'confirmed'),
+    ])
+    return {
+      id,
+      admin: c.admin.toBase58(),
+      state: c.state,
+      amount: c.amount,
+      mint: c.mint.toBase58(),
+      vault: c.vault.toBase58(),
+      vaultBalance: BigInt(bal.value.amount),
+      decimals: bal.value.decimals,
+      registered: tree.leaves.length,
+      capacity: 2 ** TREE_DEPTH,
+      root: toHex32(c.state === 'Frozen' ? c.root : tree.currentRoot),
+    }
+  }
   await sleep(300)
   const db = load()
   return {
@@ -117,7 +220,9 @@ export async function getCampaign(_connection: Connection, id: bigint): Promise<
     state: db.state,
     amount: BigInt(db.amount),
     mint: db.mint,
+    vault: 'MOCK_VAULT',
     vaultBalance: BigInt(db.vault),
+    decimals: 0,
     registered: db.registrations.length,
     capacity: 2 ** TREE_DEPTH,
     root: db.root,
@@ -146,7 +251,16 @@ export async function getClaims(_connection: Connection, _id: bigint): Promise<C
  * return the path for `commitment`. Throws if the commitment is not in the tree.
  * MOCK: a tree with only this commitment at index 0 (valid for snarkjs, not on-chain).
  */
-export async function getMerklePath(_connection: Connection, _id: bigint, commitment: bigint): Promise<MerklePath> {
+export async function getMerklePath(connection: Connection, id: bigint, commitment: bigint): Promise<MerklePath> {
+  if (LIVE.tree) {
+    const [{ currentRoot, leaves }, c] = await Promise.all([readTree(connection, campaignPda(id)), readCampaign(connection, id)])
+    const index = leaves.findIndex((l) => l === commitment)
+    if (index < 0) throw new Error("This backup's commitment is not in the campaign's on-chain tree")
+    const { root, pathElements, pathIndices } = await merklePath(leaves, index)
+    if (root !== currentRoot) throw new Error('Rebuilt tree root does not match the on-chain root')
+    if (c.state === 'Frozen' && root !== c.root) throw new Error('Tree root does not match the frozen campaign root')
+    return { root, index, pathElements, pathIndices }
+  }
   const zero = await zeroChain()
   let node = commitment
   const pathElements: bigint[] = []
@@ -228,30 +342,39 @@ export async function register(ctx: Ctx, _id: bigint, commitment: Uint8Array): P
  */
 export async function submitClaim(req: ClaimRequest): Promise<string> {
   const body = {
-    proof: toHex(req.proof),
-    nullifier: toHex(bigIntToBytes32(req.nullifier)),
+    proof: '0x' + toHex(req.proof),
+    nullifier: '0x' + toHex(bigIntToBytes32(req.nullifier)),
     recipient: req.recipient.toBase58(),
     campaign: req.campaignId.toString(),
   }
-  if (!MOCK) {
-    const res = await fetch(`${RELAYER_URL}/claim`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+  if (LIVE.claim) {
+    let res: Response
+    try {
+      res = await fetch(`${RELAYER_URL}/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    } catch {
+      throw new Error('Relayer is not reachable. Is it running on port 8787?')
+    }
     const json = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(json.error ?? `Relayer error ${res.status}`)
+    if (!res.ok || !json.signature) {
+      const parts = [json.error, json.message, ...(json.details ?? []), ...(json.logs ?? [])].filter(Boolean)
+      throw new Error(parts.join(' | ') || `Relayer error ${res.status}`)
+    }
+    if (String(json.signature).startsWith('mock-')) throw new Error('Relayer is still in mock mode (no real transaction)')
     return json.signature as string
   }
   // MOCK mirrors on-chain order: NotFrozen -> verify proof (recipient bound) -> init nullifier -> transfer
   await sleep(1200)
   const db = load()
   if (db.state !== 'Frozen') throw new Error('NotFrozen')
-  const prev = db.claims.find((c) => c.nullifier === '0x' + body.nullifier)
+  const prev = db.claims.find((c) => c.nullifier === body.nullifier)
   if (prev && prev.recipient !== body.recipient) throw new Error('ProofInvalid')
   if (prev) throw new Error('Nullifier account already in use')
   const sig = fakeSig()
-  const claim: ClaimRecord = { nullifier: '0x' + body.nullifier, recipient: body.recipient, signature: sig, time: nowSec() }
+  const claim: ClaimRecord = { nullifier: body.nullifier, recipient: body.recipient, signature: sig, time: nowSec() }
   save({ ...db, claims: [...db.claims, claim], vault: (BigInt(db.vault) - BigInt(db.amount)).toString() })
   return sig
 }

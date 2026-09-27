@@ -48,7 +48,7 @@ export default function Explorer() {
   return (
     <section className="explorer">
       <h1>Explorer</h1>
-      {api.MOCK && <p className="note">Demo mode: mock data, nothing is read from chain yet.</p>}
+      {!api.LIVE.explorer && <p className="note">Demo mode: mock data, nothing is read from chain yet.</p>}
 
       <div className="card stats">
         <div><span className="muted">State</span><b>{campaign?.state ?? '…'}</b></div>
@@ -94,7 +94,7 @@ export default function Explorer() {
                   onClick={() => picked && setGuess(r)}
                 >
                   <td className="muted">{r.index}</td>
-                  <td className="mono">{api.MOCK ? short(r.wallet) : <a href={addrUrl(r.wallet)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{short(r.wallet)}</a>}</td>
+                  <td className="mono">{!api.LIVE.explorer ? short(r.wallet) : <a href={addrUrl(r.wallet)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{short(r.wallet)}</a>}</td>
                   <td className="mono">{short(r.commitment, 6)}</td>
                   <td className="muted">{fmtTime(r.time)}</td>
                 </tr>
@@ -119,7 +119,7 @@ export default function Explorer() {
                   <td className="mono">{short(c.nullifier, 6)}</td>
                   <td className="mono">{short(c.recipient)}</td>
                   <td className="muted">{fmtTime(c.time)}</td>
-                  <td>{!api.MOCK && <a href={explorerTx(c.signature)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>tx ↗</a>}</td>
+                  <td>{api.LIVE.explorer && <a href={explorerTx(c.signature)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>tx ↗</a>}</td>
                 </tr>
               ))}
               {claims.length === 0 && <tr><td colSpan={4} className="muted">No claims yet.</td></tr>}
