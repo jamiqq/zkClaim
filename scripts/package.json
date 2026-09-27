@@ -3,10 +3,21 @@
   "version": "1.0.0",
   "main": "index.js",
   "license": "MIT",
+  "scripts": {
+    "test:tree": "tsx tree.test.ts",
+    "seed": "tsx seed.ts",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
     "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.99.0",
     "circomlibjs": "^0.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "snarkjs": "^0.7.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   }
 }
