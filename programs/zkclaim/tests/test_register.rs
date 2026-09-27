@@ -170,7 +170,9 @@ fn register_rejects_non_eligible_and_foreign_eligible() {
 
     // Outsider tries to consume the allowlisted wallet's Eligible account.
     let mut ix = register_ix(&env, &outsider.pubkey(), hex32(GOLDEN_LEAVES[0]));
-    ix.accounts[3].pubkey = eligible_pda(&env.campaign, &allowed.pubkey());
+    let own = eligible_pda(&env.campaign, &outsider.pubkey());
+    let meta = ix.accounts.iter_mut().find(|m| m.pubkey == own).unwrap();
+    meta.pubkey = eligible_pda(&env.campaign, &allowed.pubkey());
     assert!(send(&mut env.svm, ix, &outsider).unwrap_err().contains("ConstraintSeeds"));
 
     assert_eq!(read_tree(&env).next_index, 0);
@@ -208,4 +210,23 @@ fn register_open_then_frozen_rejects() {
     assert!(send(&mut env.svm, ix, &late).unwrap_err().contains("NotRegistering"));
     assert_eq!(read_tree(&env).next_index, 1);
     assert_eq!(read_tree(&env).current_root, hex32(GOLDEN_ROOTS[0]));
+}
+
+#[test]
+fn register_with_sponsor_payer_needs_no_user_sol() {
+    let mut env = created();
+    let user = solana_keypair::Keypair::new(); // never funded, as in scripts/seed.ts
+    let e = eligible_pda(&env.campaign, &user.pubkey());
+    let ix = add_eligible_ix(&env, &env.admin.pubkey(), &[user.pubkey()], &[e]);
+    send(&mut env.svm, ix, &env.admin).unwrap();
+    let sponsor_before = env.svm.get_balance(&env.admin.pubkey()).unwrap();
+
+    let ix = register_with_payer_ix(&env, &user.pubkey(), &env.admin.pubkey(), hex32(GOLDEN_LEAVES[0]));
+    send_signed(&mut env.svm, ix, &env.admin, &[&user]).unwrap();
+
+    assert_eq!(read_tree(&env).current_root, hex32(GOLDEN_ROOTS[0]));
+    assert_eq!(env.svm.get_balance(&user.pubkey()).unwrap_or(0), 0);
+    assert!(env.svm.get_account(&registration_pda(&env.campaign, &user.pubkey())).is_some());
+    // Sponsor pays Registration rent and gets Eligible rent back: net cost is the fee.
+    assert_eq!(sponsor_before - env.svm.get_balance(&env.admin.pubkey()).unwrap(), 10_000);
 }

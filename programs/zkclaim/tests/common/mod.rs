@@ -109,10 +109,16 @@ pub fn registration_pda(campaign: &Pubkey, wallet: &Pubkey) -> Pubkey {
 
 /// Sends a single-instruction tx. Err carries the error and program logs.
 pub fn send(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair) -> Result<(), String> {
+    send_signed(svm, ix, payer, &[])
+}
+
+/// Like `send`, with extra signers beyond the fee payer.
+pub fn send_signed(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, others: &[&Keypair]) -> Result<(), String> {
     svm.expire_blockhash();
     let blockhash = svm.latest_blockhash();
     let msg = Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &blockhash);
-    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[payer]).unwrap();
+    let signers: Vec<&Keypair> = std::iter::once(payer).chain(others.iter().copied()).collect();
+    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &signers).unwrap();
     svm.send_transaction(tx)
         .map(|meta| println!("CU consumed: {}", meta.compute_units_consumed))
         .map_err(|e| format!("{:?}\n{}", e.err, e.meta.logs.join("\n")))
@@ -152,11 +158,16 @@ pub fn add_eligible_ix(env: &Env, signer: &Pubkey, wallets: &[Pubkey], eligibles
 }
 
 pub fn register_ix(env: &Env, user: &Pubkey, commitment: [u8; 32]) -> Instruction {
+    register_with_payer_ix(env, user, user, commitment)
+}
+
+pub fn register_with_payer_ix(env: &Env, user: &Pubkey, payer: &Pubkey, commitment: [u8; 32]) -> Instruction {
     Instruction::new_with_bytes(
         zkclaim::id(),
         &zkclaim::instruction::Register { commitment }.data(),
         zkclaim::accounts::Register {
             user: *user,
+            payer: *payer,
             campaign: env.campaign,
             tree: env.tree,
             eligible: eligible_pda(&env.campaign, user),

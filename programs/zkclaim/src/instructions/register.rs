@@ -9,8 +9,12 @@ use crate::{
 
 #[derive(Accounts)]
 pub struct Register<'info> {
-    #[account(mut)]
+    /// The allowlisted wallet. Signs, but needs no SOL.
     pub user: Signer<'info>,
+    /// Pays rent for `registration` and receives `eligible`'s rent. Web users pass themselves;
+    /// seed scripts pass a sponsor.
+    #[account(mut)]
+    pub payer: Signer<'info>,
     #[account(
         constraint = campaign.state == CampaignState::Registering @ ErrorCode::NotRegistering
     )]
@@ -24,14 +28,14 @@ pub struct Register<'info> {
     /// Missing account = wallet not allowlisted (or already registered).
     #[account(
         mut,
-        close = user,
+        close = payer,
         seeds = [ELIGIBLE_SEED, campaign.key().as_ref(), user.key().as_ref()],
         bump
     )]
     pub eligible: Account<'info, Eligible>,
     #[account(
         init,
-        payer = user,
+        payer = payer,
         space = 8 + Registration::INIT_SPACE,
         seeds = [REGISTRATION_SEED, campaign.key().as_ref(), user.key().as_ref()],
         bump
