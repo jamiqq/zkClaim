@@ -12,3 +12,4 @@ test-ledger
 *-keypair.json
 circuits/build/
 circuits/*.ptau
+scripts/demo-secrets.json
