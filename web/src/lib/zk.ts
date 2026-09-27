@@ -42,9 +42,9 @@ export function buildInput(a: {
     recipient_lo: lo.toString(),
     campaign_id: a.campaignId.toString(),
     secret: a.secret.toString(),
-    path_elements: a.path.pathElements.map(String),
-    path_indices: a.path.pathIndices.map(String),
-  }
+    pathElements: a.path.pathElements.map(String),
+    pathIndices: a.path.pathIndices.map(String),
+  };
 }
 
 /** True once P1's zkclaim.wasm is in web/public/zk/ */
