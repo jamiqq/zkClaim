@@ -4,7 +4,9 @@
   "main": "index.js",
   "license": "MIT",
   "scripts": {
+    "check:tree": "tsx check-tree-onchain.ts",
     "test:tree": "tsx tree.test.ts",
+    "test:tree-onchain": "tsx check-tree-onchain.test.ts",
     "seed": "tsx seed.ts",
     "typecheck": "tsc --noEmit"
   },
