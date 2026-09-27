@@ -55,3 +55,16 @@ textarea.wide { width: 100%; box-sizing: border-box; margin-bottom: 8px; font-si
 .stats .full { grid-column: 1 / -1; }
 .stats .mono { overflow-wrap: anywhere; }
 .stats .muted { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+
+main:has(.explorer) { max-width: 1200px; }
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.columns .card { margin: 0; }
+@media (max-width: 800px) { .columns { grid-template-columns: 1fr; } }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: #8a8f98; font-weight: 500; padding: 6px 8px; border-bottom: 1px solid #23262d; }
+td { padding: 6px 8px; border-bottom: 1px solid #1c1f26; }
+tr.pickable { cursor: pointer; }
+tr.pickable:hover td { background: #1d2130; }
+tr.guessed td { background: #2a2350; }
+.trace p { margin: 0; }
+h2 .muted { font-weight: 400; font-size: 13px; margin-left: 6px; }

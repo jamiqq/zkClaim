@@ -5,7 +5,7 @@ import type { WalletContextState } from '@solana/wallet-adapter-react'
 import { RELAYER_URL, TREE_DEPTH } from './config'
 import { poseidon } from './lib/poseidon'
 import { type MerklePath, toHex, zeroChain } from './lib/zk'
-import { bigIntToBytes32, toHex32 } from './lib/secret'
+import { bigIntToBytes32, bytesToBigInt, toHex32 } from './lib/secret'
 
 export const MOCK = true
 
@@ -23,8 +23,10 @@ export type CampaignInfo = {
   root: string // 0x-hex: tree.current_root while Registering, campaign.root once Frozen
 }
 
-export type Registration = { index: number; wallet: string; commitment: string; signature: string }
-export type ClaimRecord = { nullifier: string; recipient: string; signature: string }
+/** From Tree.leaves + `Registered { index, commitment }` events; wallet = tx signer */
+export type Registration = { index: number; wallet: string; commitment: string; signature: string; time: number | null }
+/** From `Claimed { nullifier }` events; recipient = owner of the destination token account */
+export type ClaimRecord = { nullifier: string; recipient: string; signature: string; time: number | null }
 
 export type Ctx = { connection: Connection; wallet: WalletContextState }
 
@@ -35,8 +37,13 @@ export const ELIGIBLE_BATCH = 10
 
 // ---------- mock storage (persists in this browser) ----------
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-const fakeSig = () => toHex(crypto.getRandomValues(new Uint8Array(32)))
-const fakeRoot = () => '0x' + toHex(crypto.getRandomValues(new Uint8Array(32)))
+const rand32 = () => crypto.getRandomValues(new Uint8Array(32))
+const fakeSig = () => toHex(rand32())
+const fakeRoot = () => '0x' + toHex(rand32())
+const nowSec = () => Math.floor(Date.now() / 1000)
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+const fakeAddr = () => Array.from(crypto.getRandomValues(new Uint8Array(44)), (b) => B58[b % 58]).join('')
+
 type MockDb = {
   admin: string
   state: CampaignState
@@ -44,27 +51,42 @@ type MockDb = {
   mint: string
   vault: string
   eligible: string[]
-  registered: number
   root: string
+  registrations: Registration[]
+  claims: ClaimRecord[]
 }
 const DB_KEY = 'zkclaim:mock:db'
+function seedRegistrations(n: number): Registration[] {
+  const start = nowSec() - 6 * 3600
+  return Array.from({ length: n }, (_, i) => ({
+    index: i,
+    wallet: fakeAddr(),
+    commitment: '0x' + toHex(bigIntToBytes32(bytesToBigInt(rand32()) >> 4n)),
+    signature: fakeSig(),
+    time: start + i * 600 + Math.floor(Math.random() * 500),
+  }))
+}
 const defaultDb = (): MockDb => ({
   admin: 'MOCK_ADMIN',
   state: 'Registering',
   amount: '100',
   mint: 'MOCK_MINT',
-  vault: '0',
+  vault: '3000',
   eligible: [],
-  registered: 12,
   root: fakeRoot(),
+  registrations: seedRegistrations(30), // spec 9: 30 seeded contributors
+  claims: [],
 })
 function load(): MockDb {
   try {
     const s = localStorage.getItem(DB_KEY)
-    return s ? { ...defaultDb(), ...JSON.parse(s) } : defaultDb()
+    if (s) return { ...defaultDb(), ...JSON.parse(s) }
   } catch {
-    return defaultDb()
+    /* ignore */
   }
+  const db = defaultDb()
+  save(db)
+  return db
 }
 function save(db: MockDb) {
   try {
@@ -84,7 +106,6 @@ export function mockReset() {
     /* ignore */
   }
 }
-const mockClaimed = new Map<string, string>() // nullifier -> recipient
 
 // ---------- reads ----------
 export async function getCampaign(_connection: Connection, id: bigint): Promise<CampaignInfo> {
@@ -97,7 +118,7 @@ export async function getCampaign(_connection: Connection, id: bigint): Promise<
     amount: BigInt(db.amount),
     mint: db.mint,
     vaultBalance: BigInt(db.vault),
-    registered: db.registered,
+    registered: db.registrations.length,
     capacity: 2 ** TREE_DEPTH,
     root: db.root,
   }
@@ -106,6 +127,18 @@ export async function getCampaign(_connection: Connection, id: bigint): Promise<
 export async function isEligible(_connection: Connection, _id: bigint, _wallet: PublicKey): Promise<boolean> {
   await sleep(200)
   return true
+}
+
+/** All registrations, ordered by leaf index */
+export async function getRegistrations(_connection: Connection, _id: bigint): Promise<Registration[]> {
+  await sleep(300)
+  return load().registrations
+}
+
+/** All claims, newest first */
+export async function getClaims(_connection: Connection, _id: bigint): Promise<ClaimRecord[]> {
+  await sleep(300)
+  return [...load().claims].reverse()
 }
 
 /**
@@ -134,8 +167,9 @@ export async function createCampaign(ctx: Ctx, _id: bigint, mint: PublicKey, amo
     admin: ctx.wallet.publicKey?.toBase58() ?? 'MOCK_ADMIN',
     mint: mint.toBase58(),
     amount: amount.toString(),
-    registered: 0,
+    vault: '0',
     root: toHex32(zero[TREE_DEPTH]),
+    registrations: [],
   })
   return fakeSig()
 }
@@ -171,11 +205,20 @@ export async function freeze(_ctx: Ctx, _id: bigint): Promise<string> {
 
 // ---------- user writes ----------
 /** Sends `register(commitment)` signed by wallet A. Returns the tx signature. */
-export async function register(_ctx: Ctx, _id: bigint, _commitment: Uint8Array): Promise<string> {
+export async function register(ctx: Ctx, _id: bigint, commitment: Uint8Array): Promise<string> {
   await sleep(1200)
   const db = load()
-  save({ ...db, registered: db.registered + 1, root: fakeRoot() })
-  return fakeSig()
+  if (db.state !== 'Registering') throw new Error('NotRegistering')
+  const sig = fakeSig()
+  const reg: Registration = {
+    index: db.registrations.length,
+    wallet: ctx.wallet.publicKey?.toBase58() ?? fakeAddr(),
+    commitment: '0x' + toHex(commitment),
+    signature: sig,
+    time: nowSec(),
+  }
+  save({ ...db, registrations: [...db.registrations, reg], root: fakeRoot() })
+  return sig
 }
 
 /**
@@ -200,13 +243,15 @@ export async function submitClaim(req: ClaimRequest): Promise<string> {
     if (!res.ok) throw new Error(json.error ?? `Relayer error ${res.status}`)
     return json.signature as string
   }
-  // MOCK mirrors on-chain order: verify proof (recipient bound) -> init nullifier -> transfer
+  // MOCK mirrors on-chain order: NotFrozen -> verify proof (recipient bound) -> init nullifier -> transfer
   await sleep(1200)
-  const prev = mockClaimed.get(body.nullifier)
-  if (prev && prev !== body.recipient) throw new Error('ProofInvalid')
-  if (prev) throw new Error('Nullifier account already in use')
-  mockClaimed.set(body.nullifier, body.recipient)
   const db = load()
-  save({ ...db, vault: (BigInt(db.vault) - BigInt(db.amount)).toString() })
-  return fakeSig()
+  if (db.state !== 'Frozen') throw new Error('NotFrozen')
+  const prev = db.claims.find((c) => c.nullifier === '0x' + body.nullifier)
+  if (prev && prev.recipient !== body.recipient) throw new Error('ProofInvalid')
+  if (prev) throw new Error('Nullifier account already in use')
+  const sig = fakeSig()
+  const claim: ClaimRecord = { nullifier: '0x' + body.nullifier, recipient: body.recipient, signature: sig, time: nowSec() }
+  save({ ...db, claims: [...db.claims, claim], vault: (BigInt(db.vault) - BigInt(db.amount)).toString() })
+  return sig
 }
