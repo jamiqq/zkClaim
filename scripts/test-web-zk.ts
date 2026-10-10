@@ -1,6 +1,6 @@
-// End-to-end test of Kracavec's web/src/lib/zk.ts against the circuit (P1) and tree builder (P3).
-//   tree (Sasha) -> buildInput + nullifierOf (Kracavec) -> real Groth16 proof -> snarkjs verify
-//   -> proofToBytes (Kracavec) == reference bytes -> writes circuits/build/proof.json + public.json
+// End-to-end test of web/src/lib/zk.ts against the circuit and the tree builder.
+//   tree.ts -> buildInput + nullifierOf -> real Groth16 proof -> snarkjs verify
+//   -> proofToBytes == reference bytes -> writes circuits/build/proof.json + public.json
 //   so the Rust groth16-solana test can check the exact same proof.
 // Run from repo root:  npx tsx scripts/test-web-zk.ts
 import * as fs from "fs";
@@ -29,16 +29,16 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
   const idx = 3, campaignId = 7n;
   const recipient: PublicKey = Keypair.generate().publicKey;
 
-  // Kracavec's nullifier must equal Poseidon(secret, campaign)
+  // web nullifier must equal Poseidon(secret, campaign)
   const nul = await nullifierOf(secrets[idx], campaignId);
   ok(BigInt(nul) === H([secrets[idx], campaignId]), "nullifierOf == Poseidon(secret, campaign)");
 
-  // Kracavec's limbs vs reference
+  // web limbs vs reference
   const { hi, lo } = recipientLimbs(recipient);
   const [eh, el] = ref.recipientToLimbs(recipient.toBytes());
   ok(hi.toString() === eh && lo.toString() === el, "recipientLimbs == reference");
 
-  // Kracavec's circuit input -> real proof
+  // web circuit input -> real proof
   const input = buildInput({
     secret: secrets[idx], campaignId, recipient, nullifier: BigInt(nul),
     path: { root: tree.root, index: idx, ...tree.getPath(idx) },
@@ -53,7 +53,7 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
   }
   ok(await snarkjs.groth16.verify(VK, publicSignals, proof), "proof verifies (snarkjs)");
 
-  // Kracavec's byte format vs reference
+  // web byte format vs reference
   ok(hex(proofToBytes(proof)) === hex(ref.proofToSolana(proof)), "proofToBytes == reference bytes");
 
   // hand the same proof to the Rust groth16-solana test

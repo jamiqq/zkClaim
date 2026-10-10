@@ -1,6 +1,6 @@
 use zkclaim::verifier::verify_proof;
 
-/// P1 fixture: snarkjs proof converted to the groth16-solana layout (campaign_id = 1).
+/// Fixture: snarkjs proof converted to the groth16-solana layout (campaign_id = 1).
 fn fixture() -> ([u8; 256], [[u8; 32]; 5]) {
     let v: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/proof_solana.json")).unwrap();

@@ -104,7 +104,6 @@ export default function Register() {
   return (
     <section>
       <h1>Register</h1>
-      {!api.LIVE.register && <p className="note">Demo mode: mock data, nothing is sent on-chain yet.</p>}
       {campaign && (
         <p className="muted">
           Campaign #{campaign.id.toString()} · {campaign.state} · {campaign.registered}/{campaign.capacity} registered

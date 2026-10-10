@@ -1,32 +1,13 @@
-# React + TypeScript + Vite
+# zkClaim web app
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React + Vite front end: Register, Claim, Explorer and Admin pages, all against devnet.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```
+cp .env.example .env.local     # set VITE_RPC_URL (Helius devnet)
+yarn
+yarn dev                       # http://localhost:5173
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+- Claims go through the relayer (`../relayer`, port 8787); Vite proxies `/relayer` to it.
+- Proofs are generated in the browser from `public/zk/zkclaim.wasm` and `public/zk/zkclaim_final.zkey`.
+- The active campaign comes from `?campaign=<id>` (or the switcher in the header); default is the demo campaign.

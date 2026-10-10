@@ -7,10 +7,10 @@
 //   1. demo token mint (6 decimals) + mint supply to admin      (skipped if saved)
 //   2. create_campaign(campaignId, AMOUNT)                      (skipped if campaign PDA exists)
 //   3. fund vault with SEED_COUNT+EXTRA claims worth of tokens  (tops up to target)
-//   4. 30 seed wallets (Sasha's .seed-wallets) + random secrets -> demo-secrets.json
+//   4. 30 seed wallets (.seed-wallets from seed.ts) + random secrets -> demo-secrets.json
 //   5. add_eligible: seed wallets + optional Phantom addresses  (skips existing Eligible)
 //   6. register all 30: user = seed wallet, payer = admin       (skips existing Registration)
-//   NOT frozen: freeze only after `claim` works on devnet.
+//   Does not freeze: use `claim-cli.ts freeze` or the Admin page.
 //
 // Admin = ~/.config/solana/id.json (pays rent + fees, ~0.3 SOL total).
 // Output: scripts/demo-secrets.json (GITIGNORED - contains secrets).
@@ -176,7 +176,7 @@ async function main() {
     await sleep(PAUSE);
   }
 
-  // ---- leaf indices from the on-chain tree (Tree layout per Sava: disc 8 | filled 256 | root 32 | leaves 8192 | next_index u32) ----
+  // ---- leaf indices from the on-chain tree (Tree layout, state.rs: disc 8 | filled 256 | root 32 | leaves 8192 | next_index u32) ----
   const info = await connection.getAccountInfo(tree, "confirmed");
   if (!info) throw new Error("tree account missing");
   const LEAVES_OFF = 8 + 256 + 32;

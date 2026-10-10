@@ -57,7 +57,7 @@ function setup() {
 }
 
 async function readTree(connection: Connection, campaign: PublicKey) {
-  // Tree layout (Sava): disc 8 | filled_subtrees 256 | current_root 32 | leaves 8192 | next_index u32 LE (last 4)
+  // Tree layout (state.rs): disc 8 | filled_subtrees 256 | current_root 32 | leaves 8192 | next_index u32 LE (last 4)
   const tree = pda([Buffer.from("tree"), campaign.toBuffer()]);
   const info = await connection.getAccountInfo(tree, "confirmed");
   if (!info) throw new Error("tree account not found");

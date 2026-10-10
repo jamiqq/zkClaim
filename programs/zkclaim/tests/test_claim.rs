@@ -14,7 +14,7 @@ use {
     },
 };
 
-/// P1 fixture (programs/zkclaim/tests/fixtures): a proof for leaf 3 of a 5-leaf tree,
+/// Fixture (programs/zkclaim/tests/fixtures): a proof for leaf 3 of a 5-leaf tree,
 /// campaign_id = 1, fixed recipient. Registering the same 5 leaves reproduces its root.
 struct Fixture {
     proof: [u8; 256],

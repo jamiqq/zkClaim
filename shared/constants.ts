@@ -1,4 +1,4 @@
-// Deployed program (devnet). Only the upgrade authority (P2) deploys; the address never changes.
+// Deployed program (devnet). Only the upgrade authority deploys; the address never changes.
 // Consumers wrap it themselves: new PublicKey(PROGRAM_ID)
 export const PROGRAM_ID = "EHsj9Fz1QuPB9drLUF9SPk63y23pXcSXzfr65MjD3nT3";
 export const CLUSTER_URL = "https://api.devnet.solana.com";
