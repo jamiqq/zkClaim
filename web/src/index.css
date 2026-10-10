@@ -46,7 +46,8 @@ body { margin: 0; background: var(--paper); }
 .app .logo {
   font-family: var(--mono); font-weight: 600; font-size: 17px; letter-spacing: -0.02em;
 }
-.app .logo::before { content: '▮ '; color: var(--accent); }
+.app .logo { display: flex; align-items: center; gap: 8px; }
+.app .logo img { display: block; border-radius: 6px; }
 .app nav { display: flex; gap: 28px; flex: 1; height: 100%; }
 .app nav a {
   display: flex; align-items: center; height: 100%;

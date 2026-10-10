@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useConnection, useWallet } from '@solana/wallet-adapter-react'
 import { CAMPAIGN_ID, explorerTx } from '../config'
 import * as api from '../api'
+import { isMissingCampaign, useFlash } from '../lib/useFlash'
 import type { CampaignInfo } from '../api'
 import { type Backup, bigIntToBytes32, downloadBackup, loadLocal, makeBackup, saveLocal } from '../lib/secret'
 
@@ -17,10 +18,11 @@ export default function Register() {
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
   const [sig, setSig] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useFlash()
+  const [missing, setMissing] = useState(false)
 
   useEffect(() => {
-    api.getCampaign(connection, CAMPAIGN_ID).then(setCampaign).catch((e) => setError(String(e)))
+    api.getCampaign(connection, CAMPAIGN_ID).then(setCampaign).catch((e) => (isMissingCampaign(e) ? setMissing(true) : setError(String(e))))
   }, [connection])
 
   useEffect(() => {
@@ -59,7 +61,8 @@ export default function Register() {
   }
 
   let body
-  if (!addr) body = <div className="card">Connect the eligible wallet (A) to register.</div>
+  if (missing) body = <div className="card">Campaign #{CAMPAIGN_ID.toString()} does not exist on devnet. Open another campaign in the header.</div>
+  else if (!addr) body = <div className="card">Connect the eligible wallet (A) to register.</div>
   else if (!campaign || eligible === null) body = <div className="card">Loading…</div>
   else if (campaign.state !== 'Registering') body = <div className="card">Registration is closed.</div>
   else if (registered && !sig)

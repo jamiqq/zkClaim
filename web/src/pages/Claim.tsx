@@ -3,6 +3,7 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react'
 import { Keypair, PublicKey } from '@solana/web3.js'
 import { CAMPAIGN_ID, explorerTx } from '../config'
 import * as api from '../api'
+import { isMissingCampaign, useFlash } from '../lib/useFlash'
 import type { CampaignInfo } from '../api'
 import { type Backup, commitmentOf, listLocal, parseBackup, toHex32 } from '../lib/secret'
 import { buildInput, nullifierOf, prove, proverAvailable, recipientLimbs } from '../lib/zk'
@@ -33,9 +34,11 @@ export default function Claim() {
   const [proved, setProved] = useState<Proved | null>(null)
   const [sig, setSig] = useState<string | null>(null)
   const [attacks, setAttacks] = useState<AttackResult[]>([])
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useFlash()
+  const [missing, setMissing] = useState(false)
 
-  const reload = () => api.getCampaign(connection, CAMPAIGN_ID).then(setCampaign).catch((e) => setError(msg(e)))
+  const reload = () =>
+    api.getCampaign(connection, CAMPAIGN_ID).then(setCampaign).catch((e) => (isMissingCampaign(e) ? setMissing(true) : setError(msg(e))))
   useEffect(() => {
     reload()
     proverAvailable().then(setHasProver)
@@ -170,6 +173,10 @@ export default function Claim() {
         <p className="muted">
           Campaign #{campaign.id.toString()} · {campaign.state} · {api.fmtTokens(campaign.amount, campaign.decimals)} tokens per claim
         </p>
+      )}
+
+      {missing && (
+        <div className="card">Campaign #{CAMPAIGN_ID.toString()} does not exist on devnet. Open another campaign in the header.</div>
       )}
 
       {campaign && !frozen && (

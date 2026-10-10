@@ -3,6 +3,7 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react'
 import { PublicKey } from '@solana/web3.js'
 import { CAMPAIGN_ID, explorerTx, switchCampaign } from '../config'
 import * as api from '../api'
+import { isMissingCampaign } from '../lib/useFlash'
 import type { CampaignInfo } from '../api'
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -36,7 +37,8 @@ export default function Admin() {
 
   const [campaign, setCampaign] = useState<CampaignInfo | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [log, setLog] = useState<{ text: string; sig?: string; error?: boolean }[]>([])
+  const [log, setLog] = useState<{ id: number; text: string; sig?: string; error?: boolean }[]>([])
+  const [missing, setMissing] = useState(false)
 
   const [newIdText, setNewIdText] = useState(() => {
     const d = new Date()
@@ -49,14 +51,24 @@ export default function Admin() {
   const [fundText, setFundText] = useState('')
   const [confirmFreeze, setConfirmFreeze] = useState(false)
 
-  const reload = () => api.getCampaign(connection, CAMPAIGN_ID).then(setCampaign).catch((e) => note(msg(e), undefined, true))
+  const reload = () =>
+    api
+      .getCampaign(connection, CAMPAIGN_ID)
+      .then((c) => {
+        setCampaign(c)
+        setMissing(false)
+      })
+      .catch((e) => (isMissingCampaign(e) ? setMissing(true) : note(msg(e), undefined, true)))
   useEffect(() => {
     reload()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection])
 
+  // Successes (with tx links) stay; errors disappear after 5 s and are not repeated.
   function note(text: string, sig?: string, error?: boolean) {
-    setLog((l) => [{ text, sig, error }, ...l])
+    const id = Date.now() + Math.random()
+    setLog((l) => (error && l.some((x) => x.error && x.text === text) ? l : [{ id, text, sig, error }, ...l]))
+    if (error) setTimeout(() => setLog((l) => l.filter((x) => x.id !== id)), 5000)
   }
 
   async function run(label: string, fn: () => Promise<void>) {
@@ -106,6 +118,9 @@ export default function Admin() {
       <h1>Admin</h1>
       {!connected && <div className="card">Connect the admin wallet.</div>}
       {connected && !isAdmin && <div className="card warn">This wallet is not the campaign admin.</div>}
+      {missing && (
+        <div className="card">Campaign #{CAMPAIGN_ID.toString()} does not exist on devnet yet. Create it below, or open another campaign in the header.</div>
+      )}
 
       {campaign && (
         <div className="card stats">
@@ -197,8 +212,8 @@ export default function Admin() {
 
       {log.length > 0 && (
         <ul className="attacks">
-          {log.map((l, i) => (
-            <li key={i} className={l.error ? 'error' : 'rejected'}>
+          {log.map((l) => (
+            <li key={l.id} className={l.error ? 'error' : 'rejected'}>
               {l.text}{' '}
               {l.sig && <a href={explorerTx(l.sig)} target="_blank" rel="noreferrer">tx ↗</a>}
             </li>

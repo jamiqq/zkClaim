@@ -31,7 +31,7 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <b className="logo">zkClaim</b>
+        <b className="logo"><img src="/logo.svg" alt="" width="26" height="26" />zkClaim</b>
         <nav>
           <NavLink to="/register">Register</NavLink>
           <NavLink to="/claim">Claim</NavLink>
