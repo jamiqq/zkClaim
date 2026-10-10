@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useConnection } from '@solana/wallet-adapter-react'
-import { CAMPAIGN_ID, explorerTx } from '../config'
+import { CAMPAIGN_ID, explorerAddr, explorerTx } from '../config'
 import * as api from '../api'
+import { useFlash } from '../lib/useFlash'
 import type { CampaignInfo, ClaimRecord, Registration } from '../api'
 
 const short = (s: string, n = 4) => (s.length > n * 2 + 2 ? `${s.slice(0, n + (s.startsWith('0x') ? 2 : 0))}…${s.slice(-n)}` : s)
-const addrUrl = (a: string) => `https://explorer.solana.com/address/${a}?cluster=devnet`
 const fmtTime = (t: number | null) =>
   t ? new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'
 
@@ -14,7 +14,7 @@ export default function Explorer() {
   const [campaign, setCampaign] = useState<CampaignInfo | null>(null)
   const [regs, setRegs] = useState<Registration[]>([])
   const [claims, setClaims] = useState<ClaimRecord[]>([])
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useFlash()
 
   // "Trace it" (spec 9.6): pick a claim, then guess which registration made it
   const [picked, setPicked] = useState<ClaimRecord | null>(null)
@@ -46,7 +46,6 @@ export default function Explorer() {
   return (
     <section className="explorer">
       <h1>Explorer</h1>
-      {!api.LIVE.explorer && <p className="note">Demo mode: mock data, nothing is read from chain yet.</p>}
 
       <div className="card stats">
         <div><span className="muted">State</span><b>{campaign?.state ?? '…'}</b></div>
@@ -92,7 +91,7 @@ export default function Explorer() {
                   onClick={() => picked && setGuess(r)}
                 >
                   <td className="muted">{r.index}</td>
-                  <td className="mono">{!api.LIVE.explorer ? short(r.wallet) : <a href={addrUrl(r.wallet)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{short(r.wallet)}</a>}</td>
+                  <td className="mono"><a href={explorerAddr(r.wallet)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{short(r.wallet)}</a></td>
                   <td className="mono">{short(r.commitment, 6)}</td>
                   <td className="muted">{fmtTime(r.time)}</td>
                 </tr>
@@ -117,7 +116,7 @@ export default function Explorer() {
                   <td className="mono">{short(c.nullifier, 6)}</td>
                   <td className="mono">{short(c.recipient)}</td>
                   <td className="muted">{fmtTime(c.time)}</td>
-                  <td>{api.LIVE.explorer && <a href={explorerTx(c.signature)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>tx ↗</a>}</td>
+                  <td><a href={explorerTx(c.signature)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>tx ↗</a></td>
                 </tr>
               ))}
               {claims.length === 0 && <tr><td colSpan={4} className="muted">No claims yet.</td></tr>}

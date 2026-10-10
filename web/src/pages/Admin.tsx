@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useConnection, useWallet } from '@solana/wallet-adapter-react'
 import { PublicKey } from '@solana/web3.js'
-import { CAMPAIGN_ID, explorerTx } from '../config'
+import { CAMPAIGN_ID, explorerTx, switchCampaign } from '../config'
 import * as api from '../api'
+import { isMissingCampaign } from '../lib/useFlash'
 import type { CampaignInfo } from '../api'
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -36,22 +37,38 @@ export default function Admin() {
 
   const [campaign, setCampaign] = useState<CampaignInfo | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [log, setLog] = useState<{ text: string; sig?: string; error?: boolean }[]>([])
+  const [log, setLog] = useState<{ id: number; text: string; sig?: string; error?: boolean }[]>([])
+  const [missing, setMissing] = useState(false)
 
+  const [newIdText, setNewIdText] = useState(() => {
+    const d = new Date()
+    return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}01`
+  })
+  const [created, setCreated] = useState<bigint | null>(null)
   const [mintText, setMintText] = useState('')
   const [amountText, setAmountText] = useState('100')
   const [walletsText, setWalletsText] = useState('')
   const [fundText, setFundText] = useState('')
   const [confirmFreeze, setConfirmFreeze] = useState(false)
 
-  const reload = () => api.getCampaign(connection, CAMPAIGN_ID).then(setCampaign).catch((e) => note(msg(e), undefined, true))
+  const reload = () =>
+    api
+      .getCampaign(connection, CAMPAIGN_ID)
+      .then((c) => {
+        setCampaign(c)
+        setMissing(false)
+      })
+      .catch((e) => (isMissingCampaign(e) ? setMissing(true) : note(msg(e), undefined, true)))
   useEffect(() => {
     reload()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection])
 
+  // Successes (with tx links) stay; errors disappear after 5 s and are not repeated.
   function note(text: string, sig?: string, error?: boolean) {
-    setLog((l) => [{ text, sig, error }, ...l])
+    const id = Date.now() + Math.random()
+    setLog((l) => (error && l.some((x) => x.error && x.text === text) ? l : [{ id, text, sig, error }, ...l]))
+    if (error) setTimeout(() => setLog((l) => l.filter((x) => x.id !== id)), 5000)
   }
 
   async function run(label: string, fn: () => Promise<void>) {
@@ -74,12 +91,13 @@ export default function Admin() {
     }
   }, [mintText])
   const amount = parseAmount(amountText)
+  const newId = /^\d+$/.test(newIdText.trim()) ? BigInt(newIdText.trim()) : null
   const fund = parseAmount(fundText)
   const parsed = useMemo(() => parseWallets(walletsText), [walletsText])
   const batches = Math.ceil(parsed.valid.length / api.ELIGIBLE_BATCH)
 
   const connected = !!wallet.publicKey
-  const isAdmin = !campaign || !api.LIVE.admin || campaign.admin === wallet.publicKey?.toBase58()
+  const isAdmin = !campaign || campaign.admin === wallet.publicKey?.toBase58()
   const registering = campaign?.state === 'Registering'
   const claimsCovered = campaign && campaign.amount > 0n ? campaign.vaultBalance / campaign.amount : 0n
 
@@ -98,9 +116,11 @@ export default function Admin() {
   return (
     <section>
       <h1>Admin</h1>
-      {!api.LIVE.admin && <p className="note">Admin actions are still mocks: freeze via scripts/claim-cli.ts. The numbers above are live.</p>}
       {!connected && <div className="card">Connect the admin wallet.</div>}
       {connected && !isAdmin && <div className="card warn">This wallet is not the campaign admin.</div>}
+      {missing && (
+        <div className="card">Campaign #{CAMPAIGN_ID.toString()} does not exist on devnet yet. Create it below, or open another campaign in the header.</div>
+      )}
 
       {campaign && (
         <div className="card stats">
@@ -122,16 +142,25 @@ export default function Admin() {
         <ol className="steps">
           <li className="card">
             <h2>Create campaign</h2>
-            <p>Creates the campaign, an empty Merkle tree and a vault owned by the program.</p>
+            <p>Creates a new campaign, an empty Merkle tree and a vault owned by the program. Then switch to it to add wallets, fund and freeze.</p>
+            <input type="text" className="mono" placeholder="New campaign id" value={newIdText} onChange={(e) => setNewIdText(e.target.value)} />
             <input type="text" className="wide mono" placeholder="Token mint address" value={mintText} onChange={(e) => setMintText(e.target.value)} />
             <input type="text" className="mono" placeholder="Amount per claim (base units)" value={amountText} onChange={(e) => setAmountText(e.target.value)} />
             <button
               style={{ marginLeft: 12 }}
-              disabled={!mint || !amount || !!busy}
-              onClick={() => run('Create campaign', async () => note(`Campaign #${CAMPAIGN_ID} created`, await api.createCampaign(ctx, CAMPAIGN_ID, mint!, amount!)))}
+              disabled={!newId || !mint || !amount || !!busy}
+              onClick={() =>
+                run('Create campaign', async () => {
+                  note(`Campaign #${newId} created`, await api.createCampaign(ctx, newId!, mint!, amount!))
+                  setCreated(newId)
+                })
+              }
             >
-              {busy === 'Create campaign' ? 'Creating…' : `Create campaign #${CAMPAIGN_ID}`}
+              {busy === 'Create campaign' ? 'Creating…' : `Create campaign #${newId ?? '?'}`}
             </button>
+            {created !== null && created !== CAMPAIGN_ID && (
+              <button style={{ marginLeft: 12 }} onClick={() => switchCampaign(created)}>Switch to #{created.toString()}</button>
+            )}
             {mintText && !mint && <p className="error">Not a valid mint address.</p>}
           </li>
 
@@ -181,18 +210,10 @@ export default function Admin() {
         </ol>
       )}
 
-      {!api.LIVE.campaign && (
-        <div className="card">
-          <h2>Mock tools</h2>
-          <p>Resets the fake campaign back to Registering. Only exists in demo mode.</p>
-          <button onClick={() => { api.mockReset(); setLog([]); reload() }}>Reset mock campaign</button>
-        </div>
-      )}
-
       {log.length > 0 && (
         <ul className="attacks">
-          {log.map((l, i) => (
-            <li key={i} className={l.error ? 'error' : 'rejected'}>
+          {log.map((l) => (
+            <li key={l.id} className={l.error ? 'error' : 'rejected'}>
               {l.text}{' '}
               {l.sig && <a href={explorerTx(l.sig)} target="_blank" rel="noreferrer">tx ↗</a>}
             </li>

@@ -1,5 +1,5 @@
 // Generates a valid circuit input (input.example.json) from a real Merkle tree.
-// Also the reference implementation of the tree for Sasha (TS infra):
+// Also the reference implementation of the tree:
 //   leaf = Poseidon(secret), node = Poseidon(left, right), depth 8,
 //   zero[0] = 0, zero[i+1] = Poseidon(zero[i], zero[i]),
 //   pathIndices[i] = bit i of the leaf index (LSB first), 0 = current node is LEFT.

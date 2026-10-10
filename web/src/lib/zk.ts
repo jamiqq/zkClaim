@@ -47,7 +47,7 @@ export function buildInput(a: {
   };
 }
 
-/** True once P1's zkclaim.wasm is in web/public/zk/ */
+/** True if the circuit's wasm is served from web/public/zk/ */
 export async function proverAvailable(): Promise<boolean> {
   try {
     const r = await fetch(ZK_WASM, { method: 'HEAD' })

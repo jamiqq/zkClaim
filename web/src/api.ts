@@ -1,24 +1,37 @@
-// Contract between the UI (P4) and the TS infra (P3).
-// Everything here is a MOCK for now; P3 replaces the bodies, the signatures stay.
-import { type Connection, type ParsedTransactionWithMeta, PublicKey } from '@solana/web3.js'
+// Everything the UI does on devnet: reads (campaign, tree, activity), program instructions
+// signed by the connected wallet, and claims sent through the relayer.
+import {
+  type Connection,
+  type ParsedTransactionWithMeta,
+  PublicKey,
+  SystemProgram,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js'
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  createTransferCheckedInstruction,
+  getAssociatedTokenAddressSync,
+  getMint,
+} from '@solana/spl-token'
+import { Buffer } from 'buffer'
 import { utils as anchorUtils } from '@coral-xyz/anchor'
 import type { WalletContextState } from '@solana/wallet-adapter-react'
-import { PROGRAM_ID, RELAYER_URL, SEED_CAMPAIGN, SEED_NULLIFIER, SEED_TREE, TREE_DEPTH } from './config'
+import {
+  PROGRAM_ID,
+  RELAYER_URL,
+  SEED_CAMPAIGN,
+  SEED_ELIGIBLE,
+  SEED_NULLIFIER,
+  SEED_REGISTRATION,
+  SEED_TREE,
+  TREE_DEPTH,
+} from './config'
 import { poseidon } from './lib/poseidon'
 import { type MerklePath, toHex, zeroChain } from './lib/zk'
 import { bigIntToBytes32, bytesToBigInt, toHex32 } from './lib/secret'
-
-/** What talks to devnet for real. Everything else is still a mock. */
-export const LIVE = {
-  campaign: true, // getCampaign reads Campaign + Tree + vault
-  tree: true, // getMerklePath rebuilds the on-chain tree
-  claim: true, // submitClaim -> relayer
-  register: false,
-  admin: false,
-  explorer: true, // registrations + claims from the campaign's transaction history
-}
-/** @deprecated use LIVE.* */
-export const MOCK = !LIVE.claim
 
 // ---------- on-chain layout (programs/zkclaim/src/state.rs) ----------
 const programId = new PublicKey(PROGRAM_ID)
@@ -32,6 +45,85 @@ export const campaignPda = (id: bigint) => PublicKey.findProgramAddressSync([enc
 export const treePda = (campaign: PublicKey) => PublicKey.findProgramAddressSync([enc(SEED_TREE), campaign.toBytes()], programId)[0]
 export const nullifierPda = (campaign: PublicKey, nullifier: Uint8Array) =>
   PublicKey.findProgramAddressSync([enc(SEED_NULLIFIER), campaign.toBytes(), nullifier], programId)[0]
+export const eligiblePda = (campaign: PublicKey, wallet: PublicKey) =>
+  PublicKey.findProgramAddressSync([enc(SEED_ELIGIBLE), campaign.toBytes(), wallet.toBytes()], programId)[0]
+export const registrationPda = (campaign: PublicKey, wallet: PublicKey) =>
+  PublicKey.findProgramAddressSync([enc(SEED_REGISTRATION), campaign.toBytes(), wallet.toBytes()], programId)[0]
+
+// ---------- sending instructions (hand-built from the IDL, like the explorer decoder) ----------
+const IX_CREATE_CAMPAIGN = [111, 131, 187, 98, 160, 193, 114, 244] // args: campaign_id u64, amount u64
+const IX_ADD_ELIGIBLE = [181, 45, 41, 132, 148, 165, 2, 11] // args: wallets Vec<Pubkey>; remaining: Eligible PDAs
+const IX_FREEZE = [165, 89, 137, 206, 78, 240, 248, 118] // no args
+// IX_REGISTER (args: commitment [u8; 32]) is declared with the explorer constants below
+
+const PROGRAM_ERRORS: Record<number, string> = {
+  6000: 'Unauthorized: this wallet is not the campaign admin',
+  6001: 'NotRegistering: the campaign is already frozen',
+  6002: 'NotFrozen: the campaign is still open for registration',
+  6003: 'TreeFull: the campaign has 256 registrations already',
+  6004: 'InvalidCommitment: commitment must be non-zero and below the field modulus',
+  6007: 'InvalidAmount: amount per claim must be greater than zero',
+  6008: 'EligibleCountMismatch: wallet list does not match the accounts',
+  6009: 'InvalidEligibleAccount: wrong Eligible account',
+  6010: 'AlreadyEligible: a wallet in this batch is already on the list',
+  6011: 'PoseidonFailed: on-chain hash failed',
+  6012: 'NoRegistrations: cannot freeze a campaign with no registrations',
+}
+
+const acc = (pubkey: PublicKey, isSigner = false, isWritable = false) => ({ pubkey, isSigner, isWritable })
+function concatBytes(...parts: Uint8Array[]) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+  let o = 0
+  for (const p of parts) {
+    out.set(p, o)
+    o += p.length
+  }
+  return out
+}
+function u32le(n: number) {
+  const b = new Uint8Array(4)
+  new DataView(b.buffer).setUint32(0, n, true)
+  return b
+}
+const ix = (keys: ReturnType<typeof acc>[], disc: number[], ...args: Uint8Array[]) =>
+  new TransactionInstruction({ programId, keys, data: Buffer.from(concatBytes(Uint8Array.from(disc), ...args)) })
+
+/** Turn simulation logs into a readable reason (Anchor error, custom code, rent, duplicate account). */
+function explain(logs: string[] | null | undefined, err: unknown): string {
+  const all = (logs ?? []).join('\n')
+  const anchor = all.match(/Error Code: (\w+)\. Error Number: (\d+)\. Error Message: ([^\n]+?)\.?(\n|$)/)
+  if (anchor) return PROGRAM_ERRORS[Number(anchor[2])] ?? `${anchor[1]}: ${anchor[3]}`
+  const custom = all.match(/custom program error: 0x([0-9a-f]+)/i)
+  if (custom) {
+    const code = parseInt(custom[1], 16)
+    return PROGRAM_ERRORS[code] ?? `Program error ${code}`
+  }
+  if (/already in use/.test(all)) return 'An account already exists (campaign already created, wallet already added or registered)'
+  if (/insufficient (funds|lamports)/i.test(all) || /InsufficientFundsForRent/.test(JSON.stringify(err)))
+    return 'Not enough devnet SOL in this wallet for rent and fees'
+  return `Simulation failed: ${JSON.stringify(err)}`
+}
+
+/** Simulate first (readable errors, no wallet popup on failure), then sign with the connected wallet. */
+async function send(ctx: Ctx, instructions: TransactionInstruction[]): Promise<string> {
+  const { connection, wallet } = ctx
+  if (!wallet.publicKey) throw new Error('Connect a wallet first')
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed')
+  const tx = new VersionedTransaction(
+    new TransactionMessage({ payerKey: wallet.publicKey, recentBlockhash: blockhash, instructions }).compileToV0Message(),
+  )
+  const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: 'confirmed' })
+  if (sim.value.err) throw new Error(explain(sim.value.logs, sim.value.err))
+  const signature = await wallet.sendTransaction(tx, connection)
+  const res = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed')
+  if (res.value.err) throw new Error(`Transaction failed: ${JSON.stringify(res.value.err)}`)
+  return signature
+}
+
+function signer(ctx: Ctx) {
+  if (!ctx.wallet.publicKey) throw new Error('Connect a wallet first')
+  return ctx.wallet.publicKey
+}
 
 // Campaign (Borsh): disc 8 | admin 32 | campaign_id 8 | mint 32 | vault 32 | amount 8 | state 1 | root 32 | bump 1
 async function readCampaign(connection: Connection, id: bigint) {
@@ -188,7 +280,6 @@ async function readActivityUncached(connection: Connection, id: bigint) {
 
 /** True if this nullifier already claimed (its marker account exists on-chain). */
 export async function isClaimed(connection: Connection, id: bigint, nullifier: bigint): Promise<boolean> {
-  if (!LIVE.claim) return false
   const info = await connection.getAccountInfo(nullifierPda(campaignPda(id), bigIntToBytes32(nullifier)), 'confirmed')
   return info !== null
 }
@@ -229,223 +320,152 @@ export type ClaimRequest = { proof: Uint8Array; nullifier: bigint; recipient: Pu
 /** add_eligible batch size (spec 2: about 10 per transaction) */
 export const ELIGIBLE_BATCH = 10
 
-// ---------- mock storage (persists in this browser) ----------
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-const rand32 = () => crypto.getRandomValues(new Uint8Array(32))
-const fakeSig = () => toHex(rand32())
-const fakeRoot = () => '0x' + toHex(rand32())
-const nowSec = () => Math.floor(Date.now() / 1000)
-const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
-const fakeAddr = () => Array.from(crypto.getRandomValues(new Uint8Array(44)), (b) => B58[b % 58]).join('')
-
-type MockDb = {
-  admin: string
-  state: CampaignState
-  amount: string
-  mint: string
-  vault: string
-  eligible: string[]
-  root: string
-  registrations: Registration[]
-  claims: ClaimRecord[]
-}
-const DB_KEY = 'zkclaim:mock:db'
-function seedRegistrations(n: number): Registration[] {
-  const start = nowSec() - 6 * 3600
-  return Array.from({ length: n }, (_, i) => ({
-    index: i,
-    wallet: fakeAddr(),
-    commitment: '0x' + toHex(bigIntToBytes32(bytesToBigInt(rand32()) >> 4n)),
-    signature: fakeSig(),
-    time: start + i * 600 + Math.floor(Math.random() * 500),
-  }))
-}
-const defaultDb = (): MockDb => ({
-  admin: 'MOCK_ADMIN',
-  state: 'Registering',
-  amount: '100',
-  mint: 'MOCK_MINT',
-  vault: '3000',
-  eligible: [],
-  root: fakeRoot(),
-  registrations: seedRegistrations(30), // spec 9: 30 seeded contributors
-  claims: [],
-})
-function load(): MockDb {
-  try {
-    const s = localStorage.getItem(DB_KEY)
-    if (s) return { ...defaultDb(), ...JSON.parse(s) }
-  } catch {
-    /* ignore */
-  }
-  const db = defaultDb()
-  save(db)
-  return db
-}
-function save(db: MockDb) {
-  try {
-    localStorage.setItem(DB_KEY, JSON.stringify(db))
-  } catch {
-    /* ignore */
-  }
-}
-export function mockSetState(s: CampaignState) {
-  save({ ...load(), state: s })
-}
-export function mockReset() {
-  try {
-    localStorage.removeItem(DB_KEY)
-    localStorage.removeItem('zkclaim:mock:state') // old key
-  } catch {
-    /* ignore */
-  }
-}
 
 // ---------- reads ----------
 export async function getCampaign(connection: Connection, id: bigint): Promise<CampaignInfo> {
-  if (LIVE.campaign) {
-    const c = await readCampaign(connection, id)
-    const [tree, bal] = await Promise.all([
-      readTree(connection, campaignPda(id)),
-      connection.getTokenAccountBalance(c.vault, 'confirmed'),
-    ])
-    return {
-      id,
-      admin: c.admin.toBase58(),
-      state: c.state,
-      amount: c.amount,
-      mint: c.mint.toBase58(),
-      vault: c.vault.toBase58(),
-      vaultBalance: BigInt(bal.value.amount),
-      decimals: bal.value.decimals,
-      registered: tree.leaves.length,
-      capacity: 2 ** TREE_DEPTH,
-      root: toHex32(c.state === 'Frozen' ? c.root : tree.currentRoot),
-    }
-  }
-  await sleep(300)
-  const db = load()
+  const c = await readCampaign(connection, id)
+  const [tree, bal] = await Promise.all([
+    readTree(connection, campaignPda(id)),
+    connection.getTokenAccountBalance(c.vault, 'confirmed'),
+  ])
   return {
     id,
-    admin: db.admin,
-    state: db.state,
-    amount: BigInt(db.amount),
-    mint: db.mint,
-    vault: 'MOCK_VAULT',
-    vaultBalance: BigInt(db.vault),
-    decimals: 0,
-    registered: db.registrations.length,
+    admin: c.admin.toBase58(),
+    state: c.state,
+    amount: c.amount,
+    mint: c.mint.toBase58(),
+    vault: c.vault.toBase58(),
+    vaultBalance: BigInt(bal.value.amount),
+    decimals: bal.value.decimals,
+    registered: tree.leaves.length,
     capacity: 2 ** TREE_DEPTH,
-    root: db.root,
+    root: toHex32(c.state === 'Frozen' ? c.root : tree.currentRoot),
   }
 }
 
-export async function isEligible(_connection: Connection, _id: bigint, _wallet: PublicKey): Promise<boolean> {
-  await sleep(200)
-  return true
+/** True while the wallet's Eligible account exists. register() closes it, so a registered wallet returns false. */
+export async function isEligible(connection: Connection, id: bigint, wallet: PublicKey): Promise<boolean> {
+  return (await connection.getAccountInfo(eligiblePda(campaignPda(id), wallet), 'confirmed')) !== null
+}
+
+/** True if the wallet already registered in this campaign. */
+export async function isRegistered(connection: Connection, id: bigint, wallet: PublicKey): Promise<boolean> {
+  return (await connection.getAccountInfo(registrationPda(campaignPda(id), wallet), 'confirmed')) !== null
 }
 
 /** All registrations, ordered by leaf index */
 export async function getRegistrations(connection: Connection, id: bigint): Promise<Registration[]> {
-  if (LIVE.explorer) return (await readActivity(connection, id)).registrations
-  await sleep(300)
-  return load().registrations
+  return (await readActivity(connection, id)).registrations
 }
 
 /** All claims, newest first */
 export async function getClaims(connection: Connection, id: bigint): Promise<ClaimRecord[]> {
-  if (LIVE.explorer) return (await readActivity(connection, id)).claims
-  await sleep(300)
-  return [...load().claims].reverse()
+  return (await readActivity(connection, id)).claims
 }
 
 /**
  * Spec 5.1: read the Tree account, rebuild the tree, check the root against campaign.root,
  * return the path for `commitment`. Throws if the commitment is not in the tree.
- * MOCK: a tree with only this commitment at index 0 (valid for snarkjs, not on-chain).
  */
 export async function getMerklePath(connection: Connection, id: bigint, commitment: bigint): Promise<MerklePath> {
-  if (LIVE.tree) {
-    const [{ currentRoot, leaves }, c] = await Promise.all([readTree(connection, campaignPda(id)), readCampaign(connection, id)])
-    const index = leaves.findIndex((l) => l === commitment)
-    if (index < 0) throw new Error("This backup's commitment is not in the campaign's on-chain tree")
-    const { root, pathElements, pathIndices } = await merklePath(leaves, index)
-    if (root !== currentRoot) throw new Error('Rebuilt tree root does not match the on-chain root')
-    if (c.state === 'Frozen' && root !== c.root) throw new Error('Tree root does not match the frozen campaign root')
-    return { root, index, pathElements, pathIndices }
-  }
-  const zero = await zeroChain()
-  let node = commitment
-  const pathElements: bigint[] = []
-  for (let i = 0; i < TREE_DEPTH; i++) {
-    pathElements.push(zero[i])
-    node = await poseidon([node, zero[i]])
-  }
-  return { root: node, index: 0, pathElements, pathIndices: Array(TREE_DEPTH).fill(0) }
+  const [{ currentRoot, leaves }, c] = await Promise.all([readTree(connection, campaignPda(id)), readCampaign(connection, id)])
+  const index = leaves.findIndex((l) => l === commitment)
+  if (index < 0) throw new Error("This backup's commitment is not in the campaign's on-chain tree")
+  const { root, pathElements, pathIndices } = await merklePath(leaves, index)
+  if (root !== currentRoot) throw new Error('Rebuilt tree root does not match the on-chain root')
+  if (c.state === 'Frozen' && root !== c.root) throw new Error('Tree root does not match the frozen campaign root')
+  return { root, index, pathElements, pathIndices }
 }
 
 // ---------- admin writes (admin wallet signs) ----------
 /** create_campaign(campaign_id, amount): Campaign + Tree (root = zero[8]) + vault ATA for `mint` */
-export async function createCampaign(ctx: Ctx, _id: bigint, mint: PublicKey, amount: bigint): Promise<string> {
-  await sleep(1000)
-  const zero = await zeroChain()
-  save({
-    ...defaultDb(),
-    admin: ctx.wallet.publicKey?.toBase58() ?? 'MOCK_ADMIN',
-    mint: mint.toBase58(),
-    amount: amount.toString(),
-    vault: '0',
-    root: toHex32(zero[TREE_DEPTH]),
-    registrations: [],
-  })
-  return fakeSig()
+export async function createCampaign(ctx: Ctx, id: bigint, mint: PublicKey, amount: bigint): Promise<string> {
+  const admin = signer(ctx)
+  const campaign = campaignPda(id)
+  if (await ctx.connection.getAccountInfo(campaign, 'confirmed')) throw new Error(`Campaign #${id} already exists`)
+  const mintInfo = await ctx.connection.getAccountInfo(mint, 'confirmed')
+  if (!mintInfo) throw new Error('Mint not found on devnet')
+  if (!mintInfo.owner.equals(TOKEN_PROGRAM_ID)) throw new Error('Only classic SPL Token mints are supported (not Token-2022)')
+  const vault = getAssociatedTokenAddressSync(mint, campaign, true)
+  return send(ctx, [
+    ix(
+      [
+        acc(admin, true, true),
+        acc(campaign, false, true),
+        acc(treePda(campaign), false, true),
+        acc(mint),
+        acc(vault, false, true),
+        acc(TOKEN_PROGRAM_ID),
+        acc(ASSOCIATED_TOKEN_PROGRAM_ID),
+        acc(SystemProgram.programId),
+      ],
+      IX_CREATE_CAMPAIGN,
+      u64le(id),
+      u64le(amount),
+    ),
+  ])
 }
 
 /** add_eligible(wallets): one call = one transaction, at most ELIGIBLE_BATCH wallets */
-export async function addEligible(_ctx: Ctx, _id: bigint, wallets: PublicKey[]): Promise<string> {
+export async function addEligible(ctx: Ctx, id: bigint, wallets: PublicKey[]): Promise<string> {
   if (wallets.length > ELIGIBLE_BATCH) throw new Error(`At most ${ELIGIBLE_BATCH} wallets per transaction`)
-  await sleep(700)
-  const db = load()
-  if (db.state !== 'Registering') throw new Error('NotRegistering')
-  const set = new Set(db.eligible)
-  wallets.forEach((w) => set.add(w.toBase58()))
-  save({ ...db, eligible: [...set] })
-  return fakeSig()
+  const admin = signer(ctx)
+  const campaign = campaignPda(id)
+  return send(ctx, [
+    ix(
+      [
+        acc(admin, true, true),
+        acc(campaign),
+        acc(SystemProgram.programId),
+        ...wallets.map((w) => acc(eligiblePda(campaign, w), false, true)),
+      ],
+      IX_ADD_ELIGIBLE,
+      u32le(wallets.length),
+      ...wallets.map((w) => w.toBytes()),
+    ),
+  ])
 }
 
 /** SPL transfer from the admin's token account into the campaign vault */
-export async function fundVault(_ctx: Ctx, _id: bigint, amount: bigint): Promise<string> {
-  await sleep(1000)
-  const db = load()
-  save({ ...db, vault: (BigInt(db.vault) + amount).toString() })
-  return fakeSig()
+export async function fundVault(ctx: Ctx, id: bigint, amount: bigint): Promise<string> {
+  const owner = signer(ctx)
+  const c = await readCampaign(ctx.connection, id)
+  const { decimals } = await getMint(ctx.connection, c.mint, 'confirmed')
+  const source = getAssociatedTokenAddressSync(c.mint, owner)
+  const bal = await ctx.connection.getTokenAccountBalance(source, 'confirmed').catch(() => null)
+  if (!bal) throw new Error('This wallet has no token account for the campaign mint')
+  if (BigInt(bal.value.amount) < amount) throw new Error(`This wallet only holds ${bal.value.amount} base units of the mint`)
+  return send(ctx, [createTransferCheckedInstruction(source, c.mint, c.vault, owner, amount, decimals)])
 }
 
 /** freeze(): campaign.root = tree.current_root, state = Frozen. The admin never passes a root. */
-export async function freeze(_ctx: Ctx, _id: bigint): Promise<string> {
-  await sleep(1000)
-  const db = load()
-  if (db.state !== 'Registering') throw new Error('NotRegistering')
-  save({ ...db, state: 'Frozen' })
-  return fakeSig()
+export async function freeze(ctx: Ctx, id: bigint): Promise<string> {
+  const admin = signer(ctx)
+  const campaign = campaignPda(id)
+  return send(ctx, [ix([acc(admin, true), acc(campaign, false, true), acc(treePda(campaign))], IX_FREEZE)])
 }
 
 // ---------- user writes ----------
 /** Sends `register(commitment)` signed by wallet A. Returns the tx signature. */
-export async function register(ctx: Ctx, _id: bigint, commitment: Uint8Array): Promise<string> {
-  await sleep(1200)
-  const db = load()
-  if (db.state !== 'Registering') throw new Error('NotRegistering')
-  const sig = fakeSig()
-  const reg: Registration = {
-    index: db.registrations.length,
-    wallet: ctx.wallet.publicKey?.toBase58() ?? fakeAddr(),
-    commitment: '0x' + toHex(commitment),
-    signature: sig,
-    time: nowSec(),
-  }
-  save({ ...db, registrations: [...db.registrations, reg], root: fakeRoot() })
-  return sig
+export async function register(ctx: Ctx, id: bigint, commitment: Uint8Array): Promise<string> {
+  const user = signer(ctx) // wallet A signs and pays rent for its Registration account
+  const campaign = campaignPda(id)
+  return send(ctx, [
+    ix(
+      [
+        acc(user, true),
+        acc(user, true, true),
+        acc(campaign),
+        acc(treePda(campaign), false, true),
+        acc(eligiblePda(campaign, user), false, true),
+        acc(registrationPda(campaign, user), false, true),
+        acc(SystemProgram.programId),
+      ],
+      IX_REGISTER,
+      commitment,
+    ),
+  ])
 }
 
 /**
@@ -460,34 +480,20 @@ export async function submitClaim(req: ClaimRequest): Promise<string> {
     recipient: req.recipient.toBase58(),
     campaign: req.campaignId.toString(),
   }
-  if (LIVE.claim) {
-    let res: Response
-    try {
-      res = await fetch(`${RELAYER_URL}/claim`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-    } catch {
-      throw new Error('Relayer is not reachable. Is it running on port 8787?')
-    }
-    const json = await res.json().catch(() => ({}))
-    if (!res.ok || !json.signature) {
-      const parts = [json.error, json.message, ...(json.details ?? []), ...(json.logs ?? [])].filter(Boolean)
-      throw new Error(parts.join(' | ') || `Relayer error ${res.status}`)
-    }
-    if (String(json.signature).startsWith('mock-')) throw new Error('Relayer is still in mock mode (no real transaction)')
-    return json.signature as string
+  let res: Response
+  try {
+    res = await fetch(`${RELAYER_URL}/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new Error('Relayer is not reachable. Is it running on port 8787?')
   }
-  // MOCK mirrors on-chain order: NotFrozen -> verify proof (recipient bound) -> init nullifier -> transfer
-  await sleep(1200)
-  const db = load()
-  if (db.state !== 'Frozen') throw new Error('NotFrozen')
-  const prev = db.claims.find((c) => c.nullifier === body.nullifier)
-  if (prev && prev.recipient !== body.recipient) throw new Error('ProofInvalid')
-  if (prev) throw new Error('Nullifier account already in use')
-  const sig = fakeSig()
-  const claim: ClaimRecord = { nullifier: body.nullifier, recipient: body.recipient, signature: sig, time: nowSec() }
-  save({ ...db, claims: [...db.claims, claim], vault: (BigInt(db.vault) - BigInt(db.amount)).toString() })
-  return sig
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok || !json.signature) {
+    const parts = [json.error, json.message, ...(json.details ?? []), ...(json.logs ?? [])].filter(Boolean)
+    throw new Error(parts.join(' | ') || `Relayer error ${res.status}`)
+  }
+  return json.signature as string
 }

@@ -1,13 +1,14 @@
 import { type ChangeEvent, useEffect, useMemo, useState } from 'react'
 import { useConnection, useWallet } from '@solana/wallet-adapter-react'
 import { Keypair, PublicKey } from '@solana/web3.js'
-import { CAMPAIGN_ID, PROOF_BYTES, explorerTx } from '../config'
+import { CAMPAIGN_ID, explorerTx } from '../config'
 import * as api from '../api'
+import { isMissingCampaign, useFlash } from '../lib/useFlash'
 import type { CampaignInfo } from '../api'
 import { type Backup, commitmentOf, listLocal, parseBackup, toHex32 } from '../lib/secret'
 import { buildInput, nullifierOf, prove, proverAvailable, recipientLimbs } from '../lib/zk'
 
-type Proved = { proof: Uint8Array; nullifier: bigint; recipient: PublicKey; ms: number; mock: boolean }
+type Proved = { proof: Uint8Array; nullifier: bigint; recipient: PublicKey; ms: number }
 type Stage = 'idle' | 'path' | 'proving' | 'sending'
 type AttackResult = { name: string; ok: boolean; detail: string }
 
@@ -33,9 +34,11 @@ export default function Claim() {
   const [proved, setProved] = useState<Proved | null>(null)
   const [sig, setSig] = useState<string | null>(null)
   const [attacks, setAttacks] = useState<AttackResult[]>([])
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useFlash()
+  const [missing, setMissing] = useState(false)
 
-  const reload = () => api.getCampaign(connection, CAMPAIGN_ID).then(setCampaign).catch((e) => setError(msg(e)))
+  const reload = () =>
+    api.getCampaign(connection, CAMPAIGN_ID).then(setCampaign).catch((e) => (isMissingCampaign(e) ? setMissing(true) : setError(msg(e))))
   useEffect(() => {
     reload()
     proverAvailable().then(setHasProver)
@@ -112,20 +115,15 @@ export default function Claim() {
       if (await api.isClaimed(connection, CAMPAIGN_ID, nullifier)) {
         throw new Error('This secret has already been claimed in this campaign (its nullifier is on-chain). Use another entry.')
       }
+      if (!hasProver) throw new Error('Prover files not found in /zk/ (zkclaim.wasm, zkclaim_final.zkey)')
       setStage('proving')
-      if (hasProver) {
-        const r = await prove(buildInput({ secret, campaignId: CAMPAIGN_ID, recipient, path, nullifier }))
-        const { hi, lo } = recipientLimbs(recipient)
-        const expected = [path.root, nullifier, hi, lo, CAMPAIGN_ID].map(String)
-        if (r.publicSignals.join() !== expected.join()) {
-          throw new Error('Public signals do not match the expected order (root, nullifier, hi, lo, campaign_id)')
-        }
-        setProved({ proof: r.proof, nullifier, recipient, ms: r.ms, mock: false })
-      } else {
-        await new Promise((r) => setTimeout(r, 1500))
-        const proof = crypto.getRandomValues(new Uint8Array(PROOF_BYTES))
-        setProved({ proof, nullifier, recipient, ms: 1500, mock: true })
+      const r = await prove(buildInput({ secret, campaignId: CAMPAIGN_ID, recipient, path, nullifier }))
+      const { hi, lo } = recipientLimbs(recipient)
+      const expected = [path.root, nullifier, hi, lo, CAMPAIGN_ID].map(String)
+      if (r.publicSignals.join() !== expected.join()) {
+        throw new Error('Public signals do not match the expected order (root, nullifier, hi, lo, campaign_id)')
       }
+      setProved({ proof: r.proof, nullifier, recipient, ms: r.ms })
     } catch (e) {
       setError(msg(e))
     } finally {
@@ -170,22 +168,20 @@ export default function Claim() {
   return (
     <section>
       <h1>Claim</h1>
-      {!api.LIVE.claim && <p className="note">Demo mode: mock data, nothing is sent on-chain yet.</p>}
-      {hasProver === false && (
-        <p className="note">Prover files not found in /zk/ — using a mock proof until P1 ships zkclaim.wasm + zkey.</p>
-      )}
+      {hasProver === false && <p className="error">Prover files not found in /zk/ (zkclaim.wasm, zkclaim_final.zkey).</p>}
       {campaign && (
         <p className="muted">
           Campaign #{campaign.id.toString()} · {campaign.state} · {api.fmtTokens(campaign.amount, campaign.decimals)} tokens per claim
         </p>
       )}
 
+      {missing && (
+        <div className="card">Campaign #{CAMPAIGN_ID.toString()} does not exist on devnet. Open another campaign in the header.</div>
+      )}
+
       {campaign && !frozen && (
         <div className="card">
           <p>Claims open after the admin freezes the tree.</p>
-          {!api.LIVE.campaign && (
-            <button onClick={() => { api.mockSetState('Frozen'); reload() }}>Simulate freeze (mock)</button>
-          )}
         </div>
       )}
 
@@ -242,7 +238,7 @@ export default function Claim() {
             </button>
             {proved && (
               <p className="mono">
-                proof ready in {(proved.ms / 1000).toFixed(1)}s{proved.mock ? ' (mock)' : ''} · nullifier{' '}
+                proof ready in {(proved.ms / 1000).toFixed(1)}s · nullifier{' '}
                 {proved.nullifier.toString(16).slice(0, 10)}…
               </p>
             )}
