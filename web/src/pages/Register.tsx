@@ -12,6 +12,7 @@ export default function Register() {
 
   const [campaign, setCampaign] = useState<CampaignInfo | null>(null)
   const [eligible, setEligible] = useState<boolean | null>(null)
+  const [registered, setRegistered] = useState(false)
   const [backup, setBackup] = useState<Backup | null>(null)
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -24,6 +25,7 @@ export default function Register() {
 
   useEffect(() => {
     setEligible(null)
+    setRegistered(false)
     setBackup(null)
     setSaved(false)
     setSig(null)
@@ -32,6 +34,7 @@ export default function Register() {
     const existing = loadLocal(CAMPAIGN_ID.toString(), wallet.publicKey.toBase58())
     if (existing) setBackup(existing)
     api.isEligible(connection, CAMPAIGN_ID, wallet.publicKey).then(setEligible).catch((e) => setError(String(e)))
+    api.isRegistered(connection, CAMPAIGN_ID, wallet.publicKey).then(setRegistered).catch(() => {})
   }, [connection, wallet.publicKey])
 
   async function generate() {
@@ -59,7 +62,9 @@ export default function Register() {
   if (!addr) body = <div className="card">Connect the eligible wallet (A) to register.</div>
   else if (!campaign || eligible === null) body = <div className="card">Loading…</div>
   else if (campaign.state !== 'Registering') body = <div className="card">Registration is closed.</div>
-  else if (!eligible) body = <div className="card">This wallet is not on the list, or it has already registered.</div>
+  else if (registered && !sig)
+    body = <div className="card">This wallet is already registered. Keep your backup file and claim after the freeze.</div>
+  else if (!eligible) body = <div className="card">This wallet is not on the eligible list for this campaign.</div>
   else if (sig)
     body = (
       <div className="card ok">
@@ -90,7 +95,7 @@ export default function Register() {
         </li>
         <li className="card">
           <h2>Register</h2>
-          <p>Sign with wallet A. This shows A is eligible, but not which future claim is yours.</p>
+          <p>Sign with wallet A. This shows A is eligible, but not which future claim is yours. Wallet A pays about 0.002 devnet SOL for its registration record.</p>
           <button onClick={doRegister} disabled={!backup || !saved || busy}>{busy ? 'Registering…' : 'Register'}</button>
         </li>
       </ol>

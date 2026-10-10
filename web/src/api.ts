@@ -1,9 +1,34 @@
 // Contract between the UI (P4) and the TS infra (P3).
 // Everything here is a MOCK for now; P3 replaces the bodies, the signatures stay.
-import { type Connection, type ParsedTransactionWithMeta, PublicKey } from '@solana/web3.js'
+import {
+  type Connection,
+  type ParsedTransactionWithMeta,
+  PublicKey,
+  SystemProgram,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js'
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  createTransferCheckedInstruction,
+  getAssociatedTokenAddressSync,
+  getMint,
+} from '@solana/spl-token'
+import { Buffer } from 'buffer'
 import { utils as anchorUtils } from '@coral-xyz/anchor'
 import type { WalletContextState } from '@solana/wallet-adapter-react'
-import { PROGRAM_ID, RELAYER_URL, SEED_CAMPAIGN, SEED_NULLIFIER, SEED_TREE, TREE_DEPTH } from './config'
+import {
+  PROGRAM_ID,
+  RELAYER_URL,
+  SEED_CAMPAIGN,
+  SEED_ELIGIBLE,
+  SEED_NULLIFIER,
+  SEED_REGISTRATION,
+  SEED_TREE,
+  TREE_DEPTH,
+} from './config'
 import { poseidon } from './lib/poseidon'
 import { type MerklePath, toHex, zeroChain } from './lib/zk'
 import { bigIntToBytes32, bytesToBigInt, toHex32 } from './lib/secret'
@@ -13,8 +38,8 @@ export const LIVE = {
   campaign: true, // getCampaign reads Campaign + Tree + vault
   tree: true, // getMerklePath rebuilds the on-chain tree
   claim: true, // submitClaim -> relayer
-  register: false,
-  admin: false,
+  register: true, // register -> program (wallet A signs and pays)
+  admin: true, // create / add eligible / fund / freeze -> program (admin wallet signs)
   explorer: true, // registrations + claims from the campaign's transaction history
 }
 /** @deprecated use LIVE.* */
@@ -32,6 +57,85 @@ export const campaignPda = (id: bigint) => PublicKey.findProgramAddressSync([enc
 export const treePda = (campaign: PublicKey) => PublicKey.findProgramAddressSync([enc(SEED_TREE), campaign.toBytes()], programId)[0]
 export const nullifierPda = (campaign: PublicKey, nullifier: Uint8Array) =>
   PublicKey.findProgramAddressSync([enc(SEED_NULLIFIER), campaign.toBytes(), nullifier], programId)[0]
+export const eligiblePda = (campaign: PublicKey, wallet: PublicKey) =>
+  PublicKey.findProgramAddressSync([enc(SEED_ELIGIBLE), campaign.toBytes(), wallet.toBytes()], programId)[0]
+export const registrationPda = (campaign: PublicKey, wallet: PublicKey) =>
+  PublicKey.findProgramAddressSync([enc(SEED_REGISTRATION), campaign.toBytes(), wallet.toBytes()], programId)[0]
+
+// ---------- sending instructions (hand-built from the IDL, like the explorer decoder) ----------
+const IX_CREATE_CAMPAIGN = [111, 131, 187, 98, 160, 193, 114, 244] // args: campaign_id u64, amount u64
+const IX_ADD_ELIGIBLE = [181, 45, 41, 132, 148, 165, 2, 11] // args: wallets Vec<Pubkey>; remaining: Eligible PDAs
+const IX_FREEZE = [165, 89, 137, 206, 78, 240, 248, 118] // no args
+// IX_REGISTER (args: commitment [u8; 32]) is declared with the explorer constants below
+
+const PROGRAM_ERRORS: Record<number, string> = {
+  6000: 'Unauthorized: this wallet is not the campaign admin',
+  6001: 'NotRegistering: the campaign is already frozen',
+  6002: 'NotFrozen: the campaign is still open for registration',
+  6003: 'TreeFull: the campaign has 256 registrations already',
+  6004: 'InvalidCommitment: commitment must be non-zero and below the field modulus',
+  6007: 'InvalidAmount: amount per claim must be greater than zero',
+  6008: 'EligibleCountMismatch: wallet list does not match the accounts',
+  6009: 'InvalidEligibleAccount: wrong Eligible account',
+  6010: 'AlreadyEligible: a wallet in this batch is already on the list',
+  6011: 'PoseidonFailed: on-chain hash failed',
+  6012: 'NoRegistrations: cannot freeze a campaign with no registrations',
+}
+
+const acc = (pubkey: PublicKey, isSigner = false, isWritable = false) => ({ pubkey, isSigner, isWritable })
+function concatBytes(...parts: Uint8Array[]) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+  let o = 0
+  for (const p of parts) {
+    out.set(p, o)
+    o += p.length
+  }
+  return out
+}
+function u32le(n: number) {
+  const b = new Uint8Array(4)
+  new DataView(b.buffer).setUint32(0, n, true)
+  return b
+}
+const ix = (keys: ReturnType<typeof acc>[], disc: number[], ...args: Uint8Array[]) =>
+  new TransactionInstruction({ programId, keys, data: Buffer.from(concatBytes(Uint8Array.from(disc), ...args)) })
+
+/** Turn simulation logs into a readable reason (Anchor error, custom code, rent, duplicate account). */
+function explain(logs: string[] | null | undefined, err: unknown): string {
+  const all = (logs ?? []).join('\n')
+  const anchor = all.match(/Error Code: (\w+)\. Error Number: (\d+)\. Error Message: ([^\n]+?)\.?(\n|$)/)
+  if (anchor) return PROGRAM_ERRORS[Number(anchor[2])] ?? `${anchor[1]}: ${anchor[3]}`
+  const custom = all.match(/custom program error: 0x([0-9a-f]+)/i)
+  if (custom) {
+    const code = parseInt(custom[1], 16)
+    return PROGRAM_ERRORS[code] ?? `Program error ${code}`
+  }
+  if (/already in use/.test(all)) return 'An account already exists (campaign already created, wallet already added or registered)'
+  if (/insufficient (funds|lamports)/i.test(all) || /InsufficientFundsForRent/.test(JSON.stringify(err)))
+    return 'Not enough devnet SOL in this wallet for rent and fees'
+  return `Simulation failed: ${JSON.stringify(err)}`
+}
+
+/** Simulate first (readable errors, no wallet popup on failure), then sign with the connected wallet. */
+async function send(ctx: Ctx, instructions: TransactionInstruction[]): Promise<string> {
+  const { connection, wallet } = ctx
+  if (!wallet.publicKey) throw new Error('Connect a wallet first')
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed')
+  const tx = new VersionedTransaction(
+    new TransactionMessage({ payerKey: wallet.publicKey, recentBlockhash: blockhash, instructions }).compileToV0Message(),
+  )
+  const sim = await connection.simulateTransaction(tx, { sigVerify: false, commitment: 'confirmed' })
+  if (sim.value.err) throw new Error(explain(sim.value.logs, sim.value.err))
+  const signature = await wallet.sendTransaction(tx, connection)
+  const res = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed')
+  if (res.value.err) throw new Error(`Transaction failed: ${JSON.stringify(res.value.err)}`)
+  return signature
+}
+
+function signer(ctx: Ctx) {
+  if (!ctx.wallet.publicKey) throw new Error('Connect a wallet first')
+  return ctx.wallet.publicKey
+}
 
 // Campaign (Borsh): disc 8 | admin 32 | campaign_id 8 | mint 32 | vault 32 | amount 8 | state 1 | root 32 | bump 1
 async function readCampaign(connection: Connection, id: bigint) {
@@ -340,9 +444,17 @@ export async function getCampaign(connection: Connection, id: bigint): Promise<C
   }
 }
 
-export async function isEligible(_connection: Connection, _id: bigint, _wallet: PublicKey): Promise<boolean> {
+/** True while the wallet's Eligible account exists. register() closes it, so a registered wallet returns false. */
+export async function isEligible(connection: Connection, id: bigint, wallet: PublicKey): Promise<boolean> {
+  if (LIVE.register) return (await connection.getAccountInfo(eligiblePda(campaignPda(id), wallet), 'confirmed')) !== null
   await sleep(200)
   return true
+}
+
+/** True if the wallet already registered in this campaign. */
+export async function isRegistered(connection: Connection, id: bigint, wallet: PublicKey): Promise<boolean> {
+  if (!LIVE.register) return false
+  return (await connection.getAccountInfo(registrationPda(campaignPda(id), wallet), 'confirmed')) !== null
 }
 
 /** All registrations, ordered by leaf index */
@@ -386,7 +498,33 @@ export async function getMerklePath(connection: Connection, id: bigint, commitme
 
 // ---------- admin writes (admin wallet signs) ----------
 /** create_campaign(campaign_id, amount): Campaign + Tree (root = zero[8]) + vault ATA for `mint` */
-export async function createCampaign(ctx: Ctx, _id: bigint, mint: PublicKey, amount: bigint): Promise<string> {
+export async function createCampaign(ctx: Ctx, id: bigint, mint: PublicKey, amount: bigint): Promise<string> {
+  if (LIVE.admin) {
+    const admin = signer(ctx)
+    const campaign = campaignPda(id)
+    if (await ctx.connection.getAccountInfo(campaign, 'confirmed')) throw new Error(`Campaign #${id} already exists`)
+    const mintInfo = await ctx.connection.getAccountInfo(mint, 'confirmed')
+    if (!mintInfo) throw new Error('Mint not found on devnet')
+    if (!mintInfo.owner.equals(TOKEN_PROGRAM_ID)) throw new Error('Only classic SPL Token mints are supported (not Token-2022)')
+    const vault = getAssociatedTokenAddressSync(mint, campaign, true)
+    return send(ctx, [
+      ix(
+        [
+          acc(admin, true, true),
+          acc(campaign, false, true),
+          acc(treePda(campaign), false, true),
+          acc(mint),
+          acc(vault, false, true),
+          acc(TOKEN_PROGRAM_ID),
+          acc(ASSOCIATED_TOKEN_PROGRAM_ID),
+          acc(SystemProgram.programId),
+        ],
+        IX_CREATE_CAMPAIGN,
+        u64le(id),
+        u64le(amount),
+      ),
+    ])
+  }
   await sleep(1000)
   const zero = await zeroChain()
   save({
@@ -402,8 +540,25 @@ export async function createCampaign(ctx: Ctx, _id: bigint, mint: PublicKey, amo
 }
 
 /** add_eligible(wallets): one call = one transaction, at most ELIGIBLE_BATCH wallets */
-export async function addEligible(_ctx: Ctx, _id: bigint, wallets: PublicKey[]): Promise<string> {
+export async function addEligible(ctx: Ctx, id: bigint, wallets: PublicKey[]): Promise<string> {
   if (wallets.length > ELIGIBLE_BATCH) throw new Error(`At most ${ELIGIBLE_BATCH} wallets per transaction`)
+  if (LIVE.admin) {
+    const admin = signer(ctx)
+    const campaign = campaignPda(id)
+    return send(ctx, [
+      ix(
+        [
+          acc(admin, true, true),
+          acc(campaign),
+          acc(SystemProgram.programId),
+          ...wallets.map((w) => acc(eligiblePda(campaign, w), false, true)),
+        ],
+        IX_ADD_ELIGIBLE,
+        u32le(wallets.length),
+        ...wallets.map((w) => w.toBytes()),
+      ),
+    ])
+  }
   await sleep(700)
   const db = load()
   if (db.state !== 'Registering') throw new Error('NotRegistering')
@@ -414,7 +569,17 @@ export async function addEligible(_ctx: Ctx, _id: bigint, wallets: PublicKey[]):
 }
 
 /** SPL transfer from the admin's token account into the campaign vault */
-export async function fundVault(_ctx: Ctx, _id: bigint, amount: bigint): Promise<string> {
+export async function fundVault(ctx: Ctx, id: bigint, amount: bigint): Promise<string> {
+  if (LIVE.admin) {
+    const owner = signer(ctx)
+    const c = await readCampaign(ctx.connection, id)
+    const { decimals } = await getMint(ctx.connection, c.mint, 'confirmed')
+    const source = getAssociatedTokenAddressSync(c.mint, owner)
+    const bal = await ctx.connection.getTokenAccountBalance(source, 'confirmed').catch(() => null)
+    if (!bal) throw new Error('This wallet has no token account for the campaign mint')
+    if (BigInt(bal.value.amount) < amount) throw new Error(`This wallet only holds ${bal.value.amount} base units of the mint`)
+    return send(ctx, [createTransferCheckedInstruction(source, c.mint, c.vault, owner, amount, decimals)])
+  }
   await sleep(1000)
   const db = load()
   save({ ...db, vault: (BigInt(db.vault) + amount).toString() })
@@ -422,7 +587,12 @@ export async function fundVault(_ctx: Ctx, _id: bigint, amount: bigint): Promise
 }
 
 /** freeze(): campaign.root = tree.current_root, state = Frozen. The admin never passes a root. */
-export async function freeze(_ctx: Ctx, _id: bigint): Promise<string> {
+export async function freeze(ctx: Ctx, id: bigint): Promise<string> {
+  if (LIVE.admin) {
+    const admin = signer(ctx)
+    const campaign = campaignPda(id)
+    return send(ctx, [ix([acc(admin, true), acc(campaign, false, true), acc(treePda(campaign))], IX_FREEZE)])
+  }
   await sleep(1000)
   const db = load()
   if (db.state !== 'Registering') throw new Error('NotRegistering')
@@ -432,7 +602,26 @@ export async function freeze(_ctx: Ctx, _id: bigint): Promise<string> {
 
 // ---------- user writes ----------
 /** Sends `register(commitment)` signed by wallet A. Returns the tx signature. */
-export async function register(ctx: Ctx, _id: bigint, commitment: Uint8Array): Promise<string> {
+export async function register(ctx: Ctx, id: bigint, commitment: Uint8Array): Promise<string> {
+  if (LIVE.register) {
+    const user = signer(ctx) // wallet A signs and pays rent for its Registration account
+    const campaign = campaignPda(id)
+    return send(ctx, [
+      ix(
+        [
+          acc(user, true),
+          acc(user, true, true),
+          acc(campaign),
+          acc(treePda(campaign), false, true),
+          acc(eligiblePda(campaign, user), false, true),
+          acc(registrationPda(campaign, user), false, true),
+          acc(SystemProgram.programId),
+        ],
+        IX_REGISTER,
+        commitment,
+      ),
+    ])
+  }
   await sleep(1200)
   const db = load()
   if (db.state !== 'Registering') throw new Error('NotRegistering')

@@ -268,3 +268,9 @@ h1::before {
 /* quieter disabled state, clearer primary */
 button:not(.link):not(:disabled) { box-shadow: 0 1px 0 rgba(20,20,18,.2); }
 button:not(.link):active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
+
+/* campaign switcher in the header */
+.campaign-switch { display: flex; align-items: center; gap: 8px; }
+.campaign-switch label { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+.campaign-switch input { padding: 6px 8px; width: 11ch; }
+.campaign-switch button { padding: 6px 12px; }
